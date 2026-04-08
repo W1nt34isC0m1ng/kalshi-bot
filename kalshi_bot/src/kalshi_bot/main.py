@@ -13,7 +13,7 @@ from .config import Settings
 from .executor import ExecutionEngine
 from .market_data import MarketDataService
 from .risk import RiskManager
-from .strategy import MeanReversionMaker
+from .strategy import MomentumMaker
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -49,7 +49,7 @@ def main() -> None:
     settings = Settings()
     public_client, private_client, signer = build_clients(settings)
     market_data = MarketDataService(public_client)
-    strategy = MeanReversionMaker(settings)
+    strategy = MomentumMaker(settings)
     risk = RiskManager(settings)
     executor = ExecutionEngine(private_client or public_client, settings, risk)
 

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import datetime
 from .config import Settings
 from .models import Market, Signal
 
 
-class MeanReversionMaker:
-    """Simple first-pass strategy.
+class MomentumMaker:
+    """Momentum-based strategy for short-term markets.
 
-    Looks for open markets with enough liquidity where the quoted spread is acceptable,
-    and last trade has drifted away from the book midpoint.
+    Bets on continuation of recent price movement in markets closing soon.
     """
 
     def __init__(self, settings: Settings):
@@ -22,6 +22,18 @@ class MeanReversionMaker:
         if market.yes_bid <= 0 or market.yes_ask <= 0:
             return None
 
+        # Check time to close: focus on markets closing in 10-20 minutes
+        if not market.close_time:
+            return None
+        try:
+            close_dt = datetime.datetime.fromisoformat(market.close_time.replace('Z', '+00:00'))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            time_to_close = (close_dt - now).total_seconds() / 60  # minutes
+            if not (10 <= time_to_close <= 20):
+                return None
+        except ValueError:
+            return None
+
         spread = max(0, market.yes_ask - market.yes_bid)
         if spread > 12:
             return None
@@ -31,29 +43,26 @@ class MeanReversionMaker:
         if abs(drift) < self.settings.edge_threshold_cents:
             return None
 
-        # Improved EV calculation: estimate probability of reversion based on drift magnitude
-        # Assume larger drift indicates higher probability of reversion (up to 70% at max drift)
-        max_drift = 50  # Assume max meaningful drift
-        prob_reversion = min(0.7, 0.5 + (abs(drift) / max_drift) * 0.2)
-        prob_no_reversion = 1 - prob_reversion
-
-        side = "yes" if drift > 0 else "no"
+        # Momentum: bet on continuation, opposite of reversion
+        side = "no" if drift > 0 else "yes"  # If last < mid (drift >0), bet no (continue down)
         price = market.yes_bid + 1 if side == "yes" else market.no_bid + 1
 
-        # EV in cents: prob_win * win_amount - prob_loss * loss_amount
-        # Win: if reversion, gain the drift (approx)
-        # Loss: lose the price paid
-        ev_cents = prob_reversion * abs(drift) - prob_no_reversion * (price / 100) * 100  # Rough approximation
+        # Estimate probability of continuation (lower than reversion)
+        max_drift = 50
+        prob_continue = min(0.6, 0.5 + (abs(drift) / max_drift) * 0.1)  # Up to 60%
+        prob_reverse = 1 - prob_continue
 
-        # Adjust for spread and volume
-        spread_penalty = spread * 0.1  # Penalize wide spreads
-        volume_bonus = min(5, market.volume_24h / 500)  # Bonus for liquidity
+        # EV: prob_win * gain - prob_loss * cost
+        ev_cents = prob_continue * abs(drift) - prob_reverse * (price / 100) * 100
+
+        spread_penalty = spread * 0.1
+        volume_bonus = min(5, market.volume_24h / 500)
 
         score = ev_cents + volume_bonus - spread_penalty
         if score < 0:
-            return None  # Only signal if positive EV
+            return None
 
-        reason = f"midpoint={midpoint:.1f}, last={market.last_price}, drift={drift}, prob_rev={prob_reversion:.2f}, EV={ev_cents:.1f}, spread={spread}, vol24h={market.volume_24h:.0f}"
+        reason = f"midpoint={midpoint:.1f}, last={market.last_price}, drift={drift}, prob_cont={prob_continue:.2f}, EV={ev_cents:.1f}, spread={spread}, vol24h={market.volume_24h:.0f}, ttc={time_to_close:.1f}min"
         return Signal(
             ticker=market.ticker,
             title=market.title,
