@@ -36,6 +36,9 @@ class Settings:
     markets_per_event: int = int(os.getenv("MARKETS_PER_EVENT", "2"))
     max_signals_per_loop: int = int(os.getenv("MAX_SIGNALS_PER_LOOP", "3"))
     order_count: int = int(os.getenv("ORDER_COUNT", "2"))
+    position_reconcile_interval_seconds: int = int(
+        os.getenv("POSITION_RECONCILE_INTERVAL_SECONDS", "30")
+    )
     risk_state_path: str = os.getenv("RISK_STATE_PATH", "logs/risk_state.json")
     # Strategy tuning
     momentum_scaling_factor: float = float(os.getenv("MOMENTUM_SCALING_FACTOR", "0.15"))
@@ -49,4 +52,3 @@ class Settings:
                 "KALSHI_API_KEY_ID or KALSHI_PRIVATE_KEY_PATH not set — "
                 "running without authenticated client (dry_run only)"
             )
-

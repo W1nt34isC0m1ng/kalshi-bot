@@ -85,6 +85,8 @@ class Signal:
     spread_cents: int
     score: float
     reason: str
+    yes_bid: int | None = None
+    yes_ask: int | None = None
 
 
 @dataclass

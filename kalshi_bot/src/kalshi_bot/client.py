@@ -56,7 +56,16 @@ class KalshiHttpClient:
             headers=headers,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            detail = response.text.strip()
+            if detail:
+                raise requests.HTTPError(
+                    f"{exc} - response: {detail}",
+                    response=response,
+                ) from exc
+            raise
 
         if response.content:
             return response.json()

@@ -86,7 +86,6 @@ def _start_websocket(
         if msg_type == "ticker" and msg:
             ticker = msg.get("market_ticker") or msg.get("ticker")
             if ticker:
-                # Merge latest tick fields into the cache for this market
                 entry = ws_market_cache.setdefault(ticker, {})
                 entry.update({k: v for k, v in msg.items() if v is not None})
                 logging.debug("ws: tick %s bid=%s ask=%s", ticker, msg.get("yes_bid"), msg.get("yes_ask"))
@@ -110,8 +109,6 @@ def _apply_ws_cache(market: Market, ws_market_cache: dict[str, dict]) -> Market:
     cached = ws_market_cache.get(market.ticker)
     if not cached:
         return market
-
-    from .models import dollars_str_to_cents
 
     yes_bid = cached.get("yes_bid")
     yes_ask = cached.get("yes_ask")
@@ -138,16 +135,13 @@ def main() -> None:
     strategy = CryptoProbStrategy(api_client)
     journal = TradeJournal()
 
-    # Reconcile live positions so risk state reflects reality after restarts
     if private_client:
         _reconcile_positions(private_client, risk)
 
-    # Shared cache updated by WebSocket ticks: {ticker: {yes_bid, yes_ask, ...}}
     ws_market_cache: dict[str, dict] = {}
-    # Populated after first poll loop, used for WS subscriptions
     active_tickers: list[str] = []
+    last_position_reconcile = time.monotonic()
 
-    # Graceful shutdown via SIGINT / SIGTERM
     shutdown_event = threading.Event()
 
     def _handle_signal(signum, frame):
@@ -160,21 +154,30 @@ def main() -> None:
     ws_started = False
 
     while not shutdown_event.is_set():
-        signals = []
-        tickers_this_loop: list[str] = []
+        if (
+            private_client
+            and not settings.dry_run
+            and (time.monotonic() - last_position_reconcile) >= settings.position_reconcile_interval_seconds
+        ):
+            _reconcile_positions(private_client, risk)
+            last_position_reconcile = time.monotonic()
 
-        for market in market_data.iter_open_markets(limit_per_page=200):
+        signals = []
+        markets = list(market_data.iter_open_markets(limit_per_page=200))
+
+        market_tickers_this_loop = [market.ticker for market in markets]
+        if signer and not ws_started and market_tickers_this_loop:
+            active_tickers.extend(
+                ticker for ticker in market_tickers_this_loop if ticker not in active_tickers
+            )
+            _start_websocket(settings, signer, ws_market_cache, active_tickers, shutdown_event)
+            ws_started = True
+
+        for market in markets:
             market = _apply_ws_cache(market, ws_market_cache)
             sig = strategy.evaluate(market)
             if sig:
-                tickers_this_loop.append(sig.ticker)
                 signals.append(sig)
-
-        # Start (or re-subscribe) WebSocket after the first market scan
-        if signer and not ws_started and tickers_this_loop:
-            active_tickers.extend(tickers_this_loop)
-            _start_websocket(settings, signer, ws_market_cache, active_tickers, shutdown_event)
-            ws_started = True
 
         render_signals(signals)
 

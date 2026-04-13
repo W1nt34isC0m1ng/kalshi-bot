@@ -12,9 +12,15 @@ class RiskManager:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._state_path = Path(settings.risk_state_path)
+        self.market_position_counts: dict[str, int] = {}
         self.market_notional_cents: dict[str, int] = {}
         self.total_notional_cents: int = 0
         self._load_state()
+
+    @staticmethod
+    def _premium_cents(side: str, yes_price_cents: int) -> int:
+        """Actual premium paid per contract for a YES/NO buy."""
+        return yes_price_cents if side == "yes" else (100 - yes_price_cents)
 
     # ------------------------------------------------------------------ #
     # Persistence                                                          #
@@ -25,6 +31,10 @@ class RiskManager:
             return
         try:
             data = json.loads(self._state_path.read_text())
+            self.market_position_counts = {
+                ticker: int(count)
+                for ticker, count in data.get("market_position_counts", {}).items()
+            }
             self.market_notional_cents = data.get("market_notional_cents", {})
             self.total_notional_cents = int(data.get("total_notional_cents", 0))
             logging.info(
@@ -39,6 +49,7 @@ class RiskManager:
             self._state_path.write_text(
                 json.dumps(
                     {
+                        "market_position_counts": self.market_position_counts,
                         "market_notional_cents": self.market_notional_cents,
                         "total_notional_cents": self.total_notional_cents,
                     },
@@ -58,6 +69,7 @@ class RiskManager:
         Replaces the persisted state with ground truth from the exchange so
         that a restart never causes double-counting or blind spots.
         """
+        self.market_position_counts.clear()
         self.market_notional_cents.clear()
         self.total_notional_cents = 0
 
@@ -65,11 +77,21 @@ class RiskManager:
             ticker = pos.get("market_ticker", "")
             if not ticker:
                 continue
-            # Kalshi position counts can be negative (short NO = long YES)
-            yes_count = abs(int(pos.get("position", 0) or 0))
-            # average_price comes back as a dollar float (e.g. 0.46 = 46¢)
-            avg_price_cents = int(round(float(pos.get("average_price", 0) or 0) * 100))
-            notional = yes_count * avg_price_cents
+
+            signed_position = int(pos.get("position", 0) or 0)
+            contract_count = abs(signed_position)
+            if contract_count == 0:
+                continue
+
+            side = "yes" if signed_position > 0 else "no"
+            # average_price is reported as the YES price in dollars.
+            avg_yes_price_cents = int(round(float(pos.get("average_price", 0) or 0) * 100))
+            premium_cents = self._premium_cents(side, avg_yes_price_cents)
+            notional = contract_count * premium_cents
+
+            self.market_position_counts[ticker] = (
+                self.market_position_counts.get(ticker, 0) + contract_count
+            )
             self.market_notional_cents[ticker] = (
                 self.market_notional_cents.get(ticker, 0) + notional
             )
@@ -87,12 +109,13 @@ class RiskManager:
     # ------------------------------------------------------------------ #
 
     def approve(self, intent: OrderIntent) -> tuple[bool, str]:
-        order_notional = intent.count * intent.price
+        order_notional = intent.count * self._premium_cents(intent.side, intent.price)
+        market_count = self.market_position_counts.get(intent.ticker, 0) + intent.count
         market_total = self.market_notional_cents.get(intent.ticker, 0) + order_notional
         total = self.total_notional_cents + order_notional
 
-        if intent.count > self.settings.max_position_per_market:
-            return False, "count exceeds max_position_per_market"
+        if market_count > self.settings.max_position_per_market:
+            return False, "market position cap breached"
         if market_total > self.settings.max_notional_cents_per_market:
             return False, "market notional cap breached"
         if total > self.settings.max_total_notional_cents:
@@ -100,7 +123,10 @@ class RiskManager:
         return True, "approved"
 
     def mark_sent(self, intent: OrderIntent) -> None:
-        order_notional = intent.count * intent.price
+        order_notional = intent.count * self._premium_cents(intent.side, intent.price)
+        self.market_position_counts[intent.ticker] = (
+            self.market_position_counts.get(intent.ticker, 0) + intent.count
+        )
         self.market_notional_cents[intent.ticker] = (
             self.market_notional_cents.get(intent.ticker, 0) + order_notional
         )

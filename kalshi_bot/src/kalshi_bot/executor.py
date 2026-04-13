@@ -19,13 +19,34 @@ class ExecutionEngine:
         # cooldown tracking: {(ticker, side): last_sent_ts}
         self._last_sent: dict[tuple[str, str], float] = {}
 
+    def _maker_yes_price(self, signal: Signal) -> int:
+        """Convert a signal into a maker-safe YES-equivalent price.
+
+        The strategy scores midpoint prices, but post-only orders must rest on
+        the bid side of the chosen contract. For BUY YES that is `yes_bid`; for
+        BUY NO that is the NO bid, equivalent to `yes_ask` in YES-price terms.
+        """
+        if signal.side == "yes":
+            if signal.yes_bid is not None and signal.yes_bid > 0:
+                return signal.yes_bid
+            if signal.spread_cents > 0:
+                return max(1, signal.price - 1)
+            return signal.price
+
+        if signal.yes_ask is not None and signal.yes_ask > 0:
+            return signal.yes_ask
+        if signal.spread_cents > 0:
+            return min(99, signal.price + 1)
+        return signal.price
+
     def intent_from_signal(self, signal: Signal) -> OrderIntent:
+        maker_yes_price = self._maker_yes_price(signal)
         return OrderIntent(
             ticker=signal.ticker,
             side=signal.side,
             action="buy",
             count=min(self.settings.order_count, self.settings.max_position_per_market),
-            price=signal.price,
+            price=maker_yes_price,
             client_order_id=str(uuid.uuid4()),
             expiration_ts=int(time.time()) + self.settings.order_ttl_seconds,
             reason=signal.reason,

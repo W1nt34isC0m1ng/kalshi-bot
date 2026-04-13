@@ -35,33 +35,59 @@ class TradeJournal:
 
     def __init__(self, filepath: str = "logs/trade_journal.csv"):
         self.filepath = Path(filepath)
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        self._enabled = True
+
+        try:
+            self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logging.warning("journal: could not create log directory %s: %s", self.filepath.parent, exc)
+            self._enabled = False
 
         self._queue: queue.Queue = queue.Queue()
-        self._writer_thread = threading.Thread(
-            target=self._writer_loop, daemon=True, name="journal-writer"
-        )
-        self._writer_thread.start()
+        self._writer_thread: threading.Thread | None = None
+
+        if self._enabled:
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop, daemon=True, name="journal-writer"
+            )
+            self._writer_thread.start()
 
         # Write header if file is new/empty
-        if not self.filepath.exists() or self.filepath.stat().st_size == 0:
+        if self._enabled and (not self.filepath.exists() or self.filepath.stat().st_size == 0):
             self._queue.put("__header__")
 
     def _writer_loop(self) -> None:
-        with self.filepath.open("a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES)
+        try:
+            with self.filepath.open("a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES)
+                while True:
+                    item = self._queue.get()
+                    if item is _SENTINEL:
+                        self._queue.task_done()
+                        break
+                    if item == "__header__":
+                        writer.writeheader()
+                    else:
+                        writer.writerow(item)
+                    f.flush()
+                    self._queue.task_done()
+        except OSError as exc:
+            self._enabled = False
+            logging.warning("journal: disabling CSV logging for %s: %s", self.filepath, exc)
+
+            # Drain any queued writes so shutdown does not hang waiting on work
             while True:
-                item = self._queue.get()
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._queue.task_done()
                 if item is _SENTINEL:
                     break
-                if item == "__header__":
-                    writer.writeheader()
-                else:
-                    writer.writerow(item)
-                f.flush()
-                self._queue.task_done()
 
     def log_signal(self, signal: Signal, status: str, status_reason: str = "") -> None:
+        if not self._enabled:
+            return
         row = {
             "ts_utc": datetime.now(timezone.utc).isoformat(),
             "ticker": signal.ticker,
@@ -78,6 +104,8 @@ class TradeJournal:
 
     def shutdown(self, timeout: float = 5.0) -> None:
         """Drain the queue and stop the writer thread gracefully."""
+        if not self._enabled or self._writer_thread is None:
+            return
         self._queue.put(_SENTINEL)
         self._writer_thread.join(timeout=timeout)
         if self._writer_thread.is_alive():

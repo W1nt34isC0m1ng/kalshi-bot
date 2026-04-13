@@ -31,19 +31,6 @@ class MarketDataService:
         except Exception:
             return None
 
-    def _is_reasonably_tradeable(self, market: Market) -> bool:
-        if market.yes_ask <= 0:
-            return False
-        if market.yes_bid < 0:
-            return False
-        if market.yes_bid >= market.yes_ask:
-            return False
-
-        if market.last_price <= 0 and market.yes_bid <= 0 and market.open_interest <= 0:
-            return False
-
-        return True
-
     def _seconds_until(self, dt_value: datetime | None) -> float | None:
         if dt_value is None:
             return None
@@ -135,6 +122,8 @@ class MarketDataService:
             if not picked:
                 continue
 
+            kept_for_series = 0
+
             event_ticker, event_secs_left, kalshi_target = picked
 
             try:
@@ -151,8 +140,6 @@ class MarketDataService:
             rows = page.get("markets", [])
             print(f"[market_data] {series} event_markets_fetched={len(rows)}")
 
-            candidates: list[Market] = []
-
             for row in rows:
                 market = Market.from_api(row)
                 market.event_ticker = event_ticker
@@ -166,18 +153,15 @@ class MarketDataService:
                     f"secs_left={event_secs_left:.0f}"
                 )
 
-                if not self._is_reasonably_tradeable(market):
+                if market.yes_bid <= 0 and market.yes_ask <= 0 and market.last_price <= 0:
                     skipped += 1
-                    continue
+                    print(
+                        f"[market_data] {series} {market.ticker} has empty REST quotes; "
+                        "yielding anyway for WS bootstrap"
+                    )
 
-                candidates.append(market)
-
-            if not candidates:
-                print(f"[market_data] {series} no tradeable markets in event {event_ticker}")
-                continue
-
-            for market in candidates[: self.markets_per_event]:
                 kept += 1
+                kept_for_series += 1
                 print(
                     f"[market_data] KEPT {market.ticker} "
                     f"bid={market.yes_bid} ask={market.yes_ask} "
@@ -185,6 +169,8 @@ class MarketDataService:
                     f"secs_left={market.secs_left:.0f}"
                 )
                 yield market
+                if kept_for_series >= self.markets_per_event:
+                    break
 
         print(f"[market_data] done kept={kept} skipped={skipped}")
 
