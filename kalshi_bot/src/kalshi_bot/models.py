@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
-def _to_int_cents(value: Any) -> int:
-    if value is None:
+def dollars_str_to_cents(value) -> int:
+    if value is None or value == "":
         return 0
-    if isinstance(value, int):
-        return value
-    s = str(value)
-    if "." in s:
-        return round(float(s) * 100)
-    return int(s)
+    try:
+        return int(round(float(value) * 100))
+    except (TypeError, ValueError):
+        return 0
 
 
-def _to_float(value: Any) -> float:
-    if value is None:
+def fp_str_to_float(value) -> float:
+    if value is None or value == "":
         return 0.0
-    return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @dataclass
@@ -26,33 +26,52 @@ class Market:
     ticker: str
     title: str
     category: str
-    status: str
     yes_bid: int
     yes_ask: int
     no_bid: int
     no_ask: int
     last_price: int
-    volume: float
     volume_24h: float
-    close_time: str | None = None
-    raw: dict[str, Any] = field(default_factory=dict)
+    liquidity_cents: int
+    open_interest: float
+    event_ticker: str | None = None
+    secs_left: float | None = None
+    # Authoritative Kalshi target price in dollars, parsed from event/market title.
+    # Use this as the strike instead of re-deriving from Coinbase candles.
+    kalshi_strike: float | None = None
 
     @classmethod
-    def from_api(cls, row: dict[str, Any]) -> "Market":
+    def from_api(cls, row: dict) -> "Market":
+        yes_bid = dollars_str_to_cents(row.get("yes_bid_dollars"))
+        yes_ask = dollars_str_to_cents(row.get("yes_ask_dollars"))
+        no_bid = dollars_str_to_cents(row.get("no_bid_dollars"))
+        no_ask = dollars_str_to_cents(row.get("no_ask_dollars"))
+        last_price = dollars_str_to_cents(row.get("last_price_dollars"))
+        volume_24h = fp_str_to_float(row.get("volume_24h_fp"))
+        liquidity_cents = dollars_str_to_cents(row.get("liquidity_dollars"))
+        open_interest = fp_str_to_float(row.get("open_interest_fp"))
+
+        category = (
+            row.get("category")
+            or row.get("series_ticker")
+            or row.get("market_type")
+            or "Unknown"
+        )
+
         return cls(
-            ticker=row["ticker"],
-            title=row.get("title", row["ticker"]),
-            category=row.get("category", "Unknown"),
-            status=row.get("status", "unknown"),
-            yes_bid=_to_int_cents(row.get("yes_bid") or row.get("yes_bid_dollars", 0)),
-            yes_ask=_to_int_cents(row.get("yes_ask") or row.get("yes_ask_dollars", 0)),
-            no_bid=_to_int_cents(row.get("no_bid") or row.get("no_bid_dollars", 0)),
-            no_ask=_to_int_cents(row.get("no_ask") or row.get("no_ask_dollars", 0)),
-            last_price=_to_int_cents(row.get("last_price") or row.get("last_price_dollars", 0)),
-            volume=_to_float(row.get("volume") or row.get("volume_fp", 0)),
-            volume_24h=_to_float(row.get("volume_24h") or row.get("volume_24h_fp", 0)),
-            close_time=row.get("close_time"),
-            raw=row,
+            ticker=row.get("ticker", "UNKNOWN"),
+            title=row.get("title", "Unknown Market"),
+            category=category,
+            yes_bid=yes_bid,
+            yes_ask=yes_ask,
+            no_bid=no_bid,
+            no_ask=no_ask,
+            last_price=last_price,
+            volume_24h=volume_24h,
+            liquidity_cents=liquidity_cents,
+            open_interest=open_interest,
+            event_ticker=row.get("event_ticker"),
+            secs_left=None,
         )
 
 
@@ -72,9 +91,10 @@ class Signal:
 class OrderIntent:
     ticker: str
     side: str
-    action: str
-    count: int
-    price: int
-    client_order_id: str
-    expiration_ts: int
-    reason: str
+    action: str = "buy"
+    count: int = 1
+    price: int = 0
+    order_type: str = "limit"
+    client_order_id: str | None = None
+    expiration_ts: int | None = None
+    reason: str | None = None

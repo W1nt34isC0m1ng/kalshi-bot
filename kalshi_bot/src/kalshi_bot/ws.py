@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from typing import Callable
+from urllib.parse import urlparse
 from websocket import WebSocketApp
 
 from .auth import KalshiSigner
@@ -14,11 +15,13 @@ class KalshiWebSocket:
         self.signer = signer
         self.on_message_cb = on_message
         self.app: WebSocketApp | None = None
+        # Parse the path from ws_url (e.g. "/trade-api/ws/v2") for signing,
+        # consistent with how KalshiHttpClient handles _base_path.
+        self._ws_path = urlparse(ws_url).path.rstrip("/")
 
     def _headers(self) -> list[str]:
         ts = str(int(time.time() * 1000))
-        path = "/trade-api/ws/v2"
-        signature = self.signer.sign(ts, "GET", path)
+        signature = self.signer.sign(ts, "GET", self._ws_path)
         return [
             f"KALSHI-ACCESS-KEY: {self.signer.api_key_id}",
             f"KALSHI-ACCESS-TIMESTAMP: {ts}",
