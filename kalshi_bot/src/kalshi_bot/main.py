@@ -4,6 +4,8 @@ import logging
 import signal
 import threading
 import time
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 from rich.table import Table
@@ -58,6 +60,41 @@ def render_signals(signals):
 
     console.clear()
     console.print(table)
+
+
+def _passes_signal_filters(signal, settings: Settings) -> bool:
+    trading_now = datetime.now(ZoneInfo(settings.trading_timezone))
+    trading_start = dt_time(
+        hour=settings.trading_start_hour_local,
+        minute=settings.trading_start_minute_local,
+    )
+    trading_end = dt_time(
+        hour=settings.trading_end_hour_local,
+        minute=settings.trading_end_minute_local,
+    )
+    now_local = trading_now.time()
+
+    # Allowed window is [start, end). Outside that window, block new entries.
+    if not (trading_start <= now_local < trading_end):
+        logging.info(
+            "filter: REJECT %s local_time=%s outside trading window %s-%s (%s)",
+            signal.ticker,
+            now_local.strftime("%H:%M:%S"),
+            trading_start.strftime("%H:%M"),
+            trading_end.strftime("%H:%M"),
+            settings.trading_timezone,
+        )
+        return False
+
+    if signal.momentum_boost <= settings.min_momentum_boost:
+        logging.info(
+            "filter: REJECT %s momentum_boost=%.2f <= min_momentum_boost=%.2f",
+            signal.ticker,
+            signal.momentum_boost,
+            settings.min_momentum_boost,
+        )
+        return False
+    return True
 
 
 def _reconcile_positions(private_client: KalshiHttpClient, risk: RiskManager) -> None:
@@ -176,7 +213,7 @@ def main() -> None:
         for market in markets:
             market = _apply_ws_cache(market, ws_market_cache)
             sig = strategy.evaluate(market)
-            if sig:
+            if sig and _passes_signal_filters(sig, settings):
                 signals.append(sig)
 
         render_signals(signals)
@@ -185,10 +222,17 @@ def main() -> None:
             result = executor.maybe_send(sig)
             logging.info("trade result: %s", result["status"])
 
+            response = result.get("response", {}) if isinstance(result, dict) else {}
+            order = response.get("order", response) if isinstance(response, dict) else {}
+            order_id = str(order.get("order_id", "") or "")
+            filled_count = str(order.get("fill_count", "") or "")
+
             journal.log_signal(
                 sig,
                 status=result["status"],
                 status_reason=result.get("reason", ""),
+                order_id=order_id,
+                filled_count=filled_count,
             )
 
         time.sleep(settings.poll_interval_seconds)

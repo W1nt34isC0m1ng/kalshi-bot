@@ -473,6 +473,7 @@ class CryptoProbStrategy:
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, conf={confidence - momentum_boost:.2f}, "
                 f"momentum_boost={momentum_boost:.2f}"
             ),
+            momentum_boost=momentum_boost,
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
         )

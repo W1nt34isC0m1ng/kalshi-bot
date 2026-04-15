@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from dotenv import load_dotenv
 from typing import Optional
+
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -42,6 +43,12 @@ class Settings:
     risk_state_path: str = os.getenv("RISK_STATE_PATH", "logs/risk_state.json")
     # Strategy tuning
     momentum_scaling_factor: float = float(os.getenv("MOMENTUM_SCALING_FACTOR", "0.15"))
+    min_momentum_boost: float = float(os.getenv("MIN_MOMENTUM_BOOST", "0.01"))
+    trading_timezone: str = os.getenv("TRADING_TIMEZONE", "America/New_York")
+    trading_start_hour_local: int = int(os.getenv("TRADING_START_HOUR_LOCAL", "7"))
+    trading_start_minute_local: int = int(os.getenv("TRADING_START_MINUTE_LOCAL", "0"))
+    trading_end_hour_local: int = int(os.getenv("TRADING_END_HOUR_LOCAL", "23"))
+    trading_end_minute_local: int = int(os.getenv("TRADING_END_MINUTE_LOCAL", "58"))
 
     def __post_init__(self) -> None:
         if self.category_filter is None:

@@ -85,6 +85,7 @@ class Signal:
     spread_cents: int
     score: float
     reason: str
+    momentum_boost: float = 0.0
     yes_bid: int | None = None
     yes_ask: int | None = None
 

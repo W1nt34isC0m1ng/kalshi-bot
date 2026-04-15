@@ -31,6 +31,8 @@ class TradeJournal:
         "reason",
         "status",
         "status_reason",
+        "order_id",
+        "filled_count",
     ]
 
     def __init__(self, filepath: str = "logs/trade_journal.csv"):
@@ -42,6 +44,9 @@ class TradeJournal:
         except OSError as exc:
             logging.warning("journal: could not create log directory %s: %s", self.filepath.parent, exc)
             self._enabled = False
+
+        if self._enabled:
+            self._ensure_schema()
 
         self._queue: queue.Queue = queue.Queue()
         self._writer_thread: threading.Thread | None = None
@@ -56,10 +61,33 @@ class TradeJournal:
         if self._enabled and (not self.filepath.exists() or self.filepath.stat().st_size == 0):
             self._queue.put("__header__")
 
+    def _ensure_schema(self) -> None:
+        """Upgrade an existing CSV file to the current header schema."""
+        if not self.filepath.exists() or self.filepath.stat().st_size == 0:
+            return
+
+        try:
+            with self.filepath.open("r", newline="") as f:
+                reader = csv.DictReader(f)
+                existing_fields = reader.fieldnames or []
+                if existing_fields == self._FIELDNAMES:
+                    return
+                rows = list(reader)
+
+            with self.filepath.open("w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES)
+                writer.writeheader()
+                for row in rows:
+                    upgraded = {field: row.get(field, "") for field in self._FIELDNAMES}
+                    writer.writerow(upgraded)
+        except OSError as exc:
+            logging.warning("journal: could not upgrade CSV schema for %s: %s", self.filepath, exc)
+            self._enabled = False
+
     def _writer_loop(self) -> None:
         try:
             with self.filepath.open("a", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES)
+                writer = csv.DictWriter(f, fieldnames=self._FIELDNAMES, extrasaction="ignore")
                 while True:
                     item = self._queue.get()
                     if item is _SENTINEL:
@@ -85,7 +113,14 @@ class TradeJournal:
                 if item is _SENTINEL:
                     break
 
-    def log_signal(self, signal: Signal, status: str, status_reason: str = "") -> None:
+    def log_signal(
+        self,
+        signal: Signal,
+        status: str,
+        status_reason: str = "",
+        order_id: str = "",
+        filled_count: str = "",
+    ) -> None:
         if not self._enabled:
             return
         row = {
@@ -99,6 +134,8 @@ class TradeJournal:
             "reason": signal.reason,
             "status": status,
             "status_reason": status_reason,
+            "order_id": order_id,
+            "filled_count": filled_count,
         }
         self._queue.put(row)
 

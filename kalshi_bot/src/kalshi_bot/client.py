@@ -155,8 +155,20 @@ class KalshiHttpClient:
     def get_positions(self) -> dict[str, Any]:
         return self.request("GET", "/portfolio/positions")
 
-    def get_orders(self, *, status: str | None = None) -> dict[str, Any]:
-        params = {"status": status} if status else None
+    def get_orders(
+        self,
+        *,
+        status: str | None = None,
+        cursor: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if status:
+            params["status"] = status
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
         return self.request("GET", "/portfolio/orders", params=params)
 
     def create_order(

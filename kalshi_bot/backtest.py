@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -42,6 +43,8 @@ _MONTH_MAP = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
 }
 
+_MARKET_TICKER_TZ = ZoneInfo("America/New_York")
+
 
 def parse_market_ticker(ticker: str) -> tuple[str, datetime, str]:
     """Parse a Kalshi ticker like KXBTC15M-26APR111700-00.
@@ -52,8 +55,8 @@ def parse_market_ticker(ticker: str) -> tuple[str, datetime, str]:
       YY  = 2-digit year   (e.g. "26" → 2026)
       MMM = month abbrev   (e.g. "APR")
       DD  = day            (e.g. "11")
-      HH  = hour UTC       (e.g. "17")
-      MM  = minute UTC     (e.g. "00")
+      HH  = hour in America/New_York
+      MM  = minute in America/New_York
 
     The suffix is the last two digits of the expiry minute (00, 15, 30, 45)
     and is purely a naming convention — it does NOT indicate market direction.
@@ -76,8 +79,9 @@ def parse_market_ticker(ticker: str) -> tuple[str, datetime, str]:
     if month is None:
         raise ValueError(f"Unrecognized month abbreviation {mon_str!r} in {ticker!r}")
 
-    expiry = datetime(2000 + yy, month, day, hour, minute, 0, tzinfo=timezone.utc)
-    return prefix, expiry, suffix
+    expiry_local = datetime(2000 + yy, month, day, hour, minute, 0, tzinfo=_MARKET_TICKER_TZ)
+    expiry_utc = expiry_local.astimezone(timezone.utc)
+    return prefix, expiry_utc, suffix
 
 
 def get_precision_for_product(product: str) -> int:
