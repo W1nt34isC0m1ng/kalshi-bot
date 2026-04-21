@@ -39,6 +39,7 @@ class Market:
     # Authoritative Kalshi target price in dollars, parsed from event/market title.
     # Use this as the strike instead of re-deriving from Coinbase candles.
     kalshi_strike: float | None = None
+    series_ticker: str | None = None
 
     @classmethod
     def from_api(cls, row: dict) -> "Market":
@@ -72,6 +73,7 @@ class Market:
             open_interest=open_interest,
             event_ticker=row.get("event_ticker"),
             secs_left=None,
+            series_ticker=row.get("series_ticker"),
         )
 
 
@@ -85,9 +87,12 @@ class Signal:
     spread_cents: int
     score: float
     reason: str
+    ev_cents: float = 0.0
+    ev_roi: float = 0.0
     momentum_boost: float = 0.0
     yes_bid: int | None = None
     yes_ask: int | None = None
+    strategy: str = "generic"
 
 
 @dataclass

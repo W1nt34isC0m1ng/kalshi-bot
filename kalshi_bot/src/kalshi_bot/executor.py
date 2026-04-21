@@ -39,13 +39,29 @@ class ExecutionEngine:
             return min(99, signal.price + 1)
         return signal.price
 
+    @staticmethod
+    def _premium_cents(side: str, yes_price_cents: int) -> int:
+        return yes_price_cents if side == "yes" else (100 - yes_price_cents)
+
+    def _order_count(self, signal: Signal, maker_yes_price: int) -> int:
+        if not self.settings.auto_sizing:
+            return min(self.settings.order_count, self.settings.max_position_per_market)
+
+        premium_cents = max(1, self._premium_cents(signal.side, maker_yes_price))
+        risk_budget_cents = int(self.settings.bankroll_cents * self.settings.risk_fraction_per_trade)
+        sized_count = risk_budget_cents // premium_cents
+        sized_count = max(self.settings.min_order_count, sized_count)
+        sized_count = min(sized_count, self.settings.max_order_count)
+        return min(sized_count, self.settings.max_position_per_market)
+
     def intent_from_signal(self, signal: Signal) -> OrderIntent:
         maker_yes_price = self._maker_yes_price(signal)
+        count = self._order_count(signal, maker_yes_price)
         return OrderIntent(
             ticker=signal.ticker,
             side=signal.side,
             action="buy",
-            count=min(self.settings.order_count, self.settings.max_position_per_market),
+            count=count,
             price=maker_yes_price,
             client_order_id=str(uuid.uuid4()),
             expiration_ts=int(time.time()) + self.settings.order_ttl_seconds,

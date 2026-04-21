@@ -19,6 +19,7 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
+from .golf_strategy import GolfValueStrategy
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -39,20 +40,26 @@ def build_clients(settings: Settings):
 
 def render_signals(signals):
     table = Table(title="Kalshi Bot Signals")
+    table.add_column("Strategy")
     table.add_column("Ticker")
     table.add_column("Side")
     table.add_column("Price")
     table.add_column("Edge")
+    table.add_column("EV")
+    table.add_column("EV ROI")
     table.add_column("Spread")
     table.add_column("Score")
     table.add_column("Why")
 
     for sig in sorted(signals, key=lambda s: s.score, reverse=True)[:15]:
         table.add_row(
+            sig.strategy,
             sig.ticker,
             sig.side.upper(),
             str(sig.price),
             str(sig.edge_cents),
+            f"{sig.ev_cents:.1f}",
+            f"{sig.ev_roi * 100:.1f}%",
             str(sig.spread_cents),
             f"{sig.score:.1f}",
             sig.reason,
@@ -62,7 +69,104 @@ def render_signals(signals):
     console.print(table)
 
 
+def _dollars_fp_to_cents(value) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(round(float(value) * 100))
+    except (TypeError, ValueError):
+        return None
+
+
+def _premium_cents(side: str, yes_price_cents: int) -> int:
+    return yes_price_cents if side == "yes" else (100 - yes_price_cents)
+
+
+def _refresh_ws_top_of_book(entry: dict) -> None:
+    yes_levels = entry.get("yes_levels", {})
+    no_levels = entry.get("no_levels", {})
+
+    yes_bid = max((price for price, size in yes_levels.items() if size > 0), default=None)
+    no_bid = max((price for price, size in no_levels.items() if size > 0), default=None)
+
+    if yes_bid is not None:
+        entry["yes_bid"] = yes_bid
+        entry["no_ask"] = max(1, min(99, 100 - yes_bid))
+    else:
+        entry.pop("yes_bid", None)
+        entry.pop("no_ask", None)
+
+    if no_bid is not None:
+        entry["no_bid"] = no_bid
+        entry["yes_ask"] = max(1, min(99, 100 - no_bid))
+    else:
+        entry.pop("no_bid", None)
+        entry.pop("yes_ask", None)
+
+
+def _apply_orderbook_snapshot(msg: dict, ws_market_cache: dict[str, dict]) -> None:
+    ticker = msg.get("market_ticker") or msg.get("ticker")
+    if not ticker:
+        return
+
+    entry = ws_market_cache.setdefault(ticker, {})
+    yes_levels = {}
+    no_levels = {}
+
+    for price_fp, size_fp in msg.get("yes_dollars_fp", []) or []:
+        price_cents = _dollars_fp_to_cents(price_fp)
+        if price_cents is None:
+            continue
+        try:
+            yes_levels[price_cents] = float(size_fp)
+        except (TypeError, ValueError):
+            continue
+
+    for price_fp, size_fp in msg.get("no_dollars_fp", []) or []:
+        price_cents = _dollars_fp_to_cents(price_fp)
+        if price_cents is None:
+            continue
+        try:
+            no_levels[price_cents] = float(size_fp)
+        except (TypeError, ValueError):
+            continue
+
+    entry["yes_levels"] = yes_levels
+    entry["no_levels"] = no_levels
+    _refresh_ws_top_of_book(entry)
+
+
+def _apply_orderbook_delta(msg: dict, ws_market_cache: dict[str, dict]) -> None:
+    ticker = msg.get("market_ticker") or msg.get("ticker")
+    side = msg.get("side")
+    price_cents = _dollars_fp_to_cents(msg.get("price_dollars"))
+    if not ticker or side not in {"yes", "no"} or price_cents is None:
+        return
+
+    try:
+        delta = float(msg.get("delta_fp"))
+    except (TypeError, ValueError):
+        return
+
+    entry = ws_market_cache.setdefault(ticker, {})
+    levels_key = f"{side}_levels"
+    levels = entry.setdefault(levels_key, {})
+    new_size = float(levels.get(price_cents, 0.0)) + delta
+
+    if new_size <= 0:
+        levels.pop(price_cents, None)
+    else:
+        levels[price_cents] = new_size
+
+    _refresh_ws_top_of_book(entry)
+
+
 def _passes_signal_filters(signal, settings: Settings) -> bool:
+    if signal.strategy.startswith("golf_"):
+        return True
+    if not settings.enable_signal_filters:
+        return True
+
     trading_now = datetime.now(ZoneInfo(settings.trading_timezone))
     trading_start = dt_time(
         hour=settings.trading_start_hour_local,
@@ -97,6 +201,15 @@ def _passes_signal_filters(signal, settings: Settings) -> bool:
     return True
 
 
+def _shadow_side(signal, settings: Settings) -> str | None:
+    """Return a shadow status when a signal should be observed but not traded."""
+    if signal.strategy.startswith("golf_") and settings.golf_shadow_mode:
+        return "shadow_golf"
+    if settings.live_side_mode == "yes_only" and signal.side == "no":
+        return "shadow_no"
+    return None
+
+
 def _reconcile_positions(private_client: KalshiHttpClient, risk: RiskManager) -> None:
     """Fetch live positions from the exchange and rebuild risk state."""
     try:
@@ -126,6 +239,28 @@ def _start_websocket(
                 entry = ws_market_cache.setdefault(ticker, {})
                 entry.update({k: v for k, v in msg.items() if v is not None})
                 logging.debug("ws: tick %s bid=%s ask=%s", ticker, msg.get("yes_bid"), msg.get("yes_ask"))
+        elif msg_type == "orderbook_snapshot" and msg:
+            _apply_orderbook_snapshot(msg, ws_market_cache)
+            ticker = msg.get("market_ticker") or msg.get("ticker")
+            if ticker:
+                entry = ws_market_cache.get(ticker, {})
+                logging.debug(
+                    "ws: snapshot %s bid=%s ask=%s",
+                    ticker,
+                    entry.get("yes_bid"),
+                    entry.get("yes_ask"),
+                )
+        elif msg_type == "orderbook_delta" and msg:
+            _apply_orderbook_delta(msg, ws_market_cache)
+            ticker = msg.get("market_ticker") or msg.get("ticker")
+            if ticker:
+                entry = ws_market_cache.get(ticker, {})
+                logging.debug(
+                    "ws: delta %s bid=%s ask=%s",
+                    ticker,
+                    entry.get("yes_bid"),
+                    entry.get("yes_ask"),
+                )
 
     def run():
         while not shutdown_event.is_set():
@@ -149,12 +284,18 @@ def _apply_ws_cache(market: Market, ws_market_cache: dict[str, dict]) -> Market:
 
     yes_bid = cached.get("yes_bid")
     yes_ask = cached.get("yes_ask")
+    no_bid = cached.get("no_bid")
+    no_ask = cached.get("no_ask")
     last = cached.get("last_price")
 
     if yes_bid is not None:
         market.yes_bid = int(yes_bid)
     if yes_ask is not None:
         market.yes_ask = int(yes_ask)
+    if no_bid is not None:
+        market.no_bid = int(no_bid)
+    if no_ask is not None:
+        market.no_ask = int(no_ask)
     if last is not None:
         market.last_price = int(last)
 
@@ -169,8 +310,15 @@ def main() -> None:
     market_data = MarketDataService(api_client, markets_per_event=settings.markets_per_event)
     risk = RiskManager(settings)
     executor = ExecutionEngine(api_client, settings, risk)
-    strategy = CryptoProbStrategy(api_client)
-    journal = TradeJournal()
+    strategy = CryptoProbStrategy(
+        api_client,
+        min_edge_cents=settings.crypto_min_edge_cents,
+        max_spread_cents=settings.crypto_max_spread_cents,
+        min_score=settings.crypto_min_score,
+        momentum_scaling_factor=settings.momentum_scaling_factor,
+    )
+    golf_strategy = GolfValueStrategy(api_client, settings) if settings.enable_golf_strategy else None
+    journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:
         _reconcile_positions(private_client, risk)
@@ -216,16 +364,47 @@ def main() -> None:
             if sig and _passes_signal_filters(sig, settings):
                 signals.append(sig)
 
+        if golf_strategy:
+            for sig in golf_strategy.iter_signals():
+                if _passes_signal_filters(sig, settings):
+                    signals.append(sig)
+
         render_signals(signals)
 
         for sig in sorted(signals, key=lambda s: s.score, reverse=True)[: settings.max_signals_per_loop]:
+            shadow_status = _shadow_side(sig, settings)
+            if shadow_status:
+                if shadow_status == "shadow_golf":
+                    status_reason = "golf_shadow_mode"
+                else:
+                    status_reason = f"live_side_mode_{settings.live_side_mode}"
+                logging.info("trade result: %s", shadow_status)
+                journal.log_signal(
+                    sig,
+                    status=shadow_status,
+                    status_reason=status_reason,
+                )
+                continue
+
             result = executor.maybe_send(sig)
             logging.info("trade result: %s", result["status"])
 
             response = result.get("response", {}) if isinstance(result, dict) else {}
             order = response.get("order", response) if isinstance(response, dict) else {}
+            intent = result.get("intent") if isinstance(result, dict) else None
             order_id = str(order.get("order_id", "") or "")
             filled_count = str(order.get("fill_count", "") or "")
+            requested_count = str(getattr(intent, "count", "") or "")
+            premium_cents = (
+                _premium_cents(getattr(intent, "side"), getattr(intent, "price"))
+                if intent is not None
+                else ""
+            )
+            notional_cents = (
+                getattr(intent, "count") * premium_cents
+                if intent is not None and isinstance(premium_cents, int)
+                else ""
+            )
 
             journal.log_signal(
                 sig,
@@ -233,6 +412,9 @@ def main() -> None:
                 status_reason=result.get("reason", ""),
                 order_id=order_id,
                 filled_count=filled_count,
+                requested_count=requested_count,
+                premium_cents_per_contract=str(premium_cents),
+                notional_cents=str(notional_cents),
             )
 
         time.sleep(settings.poll_interval_seconds)

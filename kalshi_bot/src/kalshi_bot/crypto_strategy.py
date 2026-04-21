@@ -438,6 +438,10 @@ class CryptoProbStrategy:
         momentum_boost = self._calculate_momentum_boost(spot_now, product, side)
         confidence = min(1.0, confidence + momentum_boost)
 
+        premium_cents = market_price if side == "yes" else (100.0 - market_price)
+        ev_cents = abs(raw_edge)
+        ev_roi = ev_cents / max(premium_cents, 1e-9)
+
         # spread_penalty: 0.15¢ per cent of spread, accounts for the cost
         # of getting lifted / adverse fill at expiry.
         spread_penalty = spread * 0.15
@@ -465,15 +469,19 @@ class CryptoProbStrategy:
             side=side,
             price=max(1, min(99, int(round(market_price)))),
             edge_cents=int(round(abs(raw_edge))),
+            ev_cents=float(round(ev_cents, 2)),
+            ev_roi=float(round(ev_roi, 4)),
             spread_cents=int(round(spread)),
             score=float(round(adjusted_edge, 2)),
             reason=(
                 f"asset={prefix}, spot={spot_now:.2f}, strike={strike_price:.2f}, "
                 f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, d2={d2:.2f}, "
-                f"fair={fair_cents:.1f}, market={market_price:.1f}, conf={confidence - momentum_boost:.2f}, "
+                f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
+                f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
                 f"momentum_boost={momentum_boost:.2f}"
             ),
             momentum_boost=momentum_boost,
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
+            strategy="crypto_prob",
         )

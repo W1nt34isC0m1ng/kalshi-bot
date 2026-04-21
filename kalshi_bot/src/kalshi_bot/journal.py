@@ -22,10 +22,13 @@ class TradeJournal:
 
     _FIELDNAMES = [
         "ts_utc",
+        "strategy",
         "ticker",
         "side",
         "price",
         "edge_cents",
+        "ev_cents",
+        "ev_roi",
         "spread_cents",
         "score",
         "reason",
@@ -33,6 +36,9 @@ class TradeJournal:
         "status_reason",
         "order_id",
         "filled_count",
+        "requested_count",
+        "premium_cents_per_contract",
+        "notional_cents",
     ]
 
     def __init__(self, filepath: str = "logs/trade_journal.csv"):
@@ -120,15 +126,21 @@ class TradeJournal:
         status_reason: str = "",
         order_id: str = "",
         filled_count: str = "",
+        requested_count: str = "",
+        premium_cents_per_contract: str = "",
+        notional_cents: str = "",
     ) -> None:
         if not self._enabled:
             return
         row = {
             "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "strategy": signal.strategy,
             "ticker": signal.ticker,
             "side": signal.side,
             "price": signal.price,
             "edge_cents": signal.edge_cents,
+            "ev_cents": signal.ev_cents,
+            "ev_roi": signal.ev_roi,
             "spread_cents": signal.spread_cents,
             "score": signal.score,
             "reason": signal.reason,
@@ -136,6 +148,9 @@ class TradeJournal:
             "status_reason": status_reason,
             "order_id": order_id,
             "filled_count": filled_count,
+            "requested_count": requested_count,
+            "premium_cents_per_contract": premium_cents_per_contract,
+            "notional_cents": notional_cents,
         }
         self._queue.put(row)
 
