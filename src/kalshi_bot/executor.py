@@ -45,7 +45,10 @@ class ExecutionEngine:
 
     def _order_count(self, signal: Signal, maker_yes_price: int) -> int:
         if not self.settings.auto_sizing:
-            return min(self.settings.order_count, self.settings.max_position_per_market)
+            # Honour strategy-computed sizing (e.g. MeanReversionStrategy scales
+            # by confidence), falling back to the fixed ORDER_COUNT setting.
+            base = signal.position_size if signal.position_size > 1 else self.settings.order_count
+            return min(base, self.settings.max_position_per_market)
 
         premium_cents = max(1, self._premium_cents(signal.side, maker_yes_price))
         risk_budget_cents = int(self.settings.bankroll_cents * self.settings.risk_fraction_per_trade)

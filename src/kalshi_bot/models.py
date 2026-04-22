@@ -92,6 +92,7 @@ class Signal:
     momentum_boost: float = 0.0
     yes_bid: int | None = None
     yes_ask: int | None = None
+    position_size: int = 1
     strategy: str = "generic"
 
 

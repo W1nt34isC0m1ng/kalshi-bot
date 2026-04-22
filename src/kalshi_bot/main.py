@@ -19,6 +19,7 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
+from .mean_reversion_strategy import MeanReversionStrategy
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -187,7 +188,9 @@ def _passes_signal_filters(signal, settings: Settings) -> bool:
         )
         return False
 
-    if signal.momentum_boost <= settings.min_momentum_boost:
+    # Momentum filter only applies to crypto_prob signals — mean_reversion
+    # deliberately trades against momentum and would always be blocked otherwise.
+    if signal.strategy == "crypto_prob" and signal.momentum_boost <= settings.min_momentum_boost:
         logging.info(
             "filter: REJECT %s momentum_boost=%.2f <= min_momentum_boost=%.2f",
             signal.ticker,
@@ -312,6 +315,7 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
+    mean_reversion = MeanReversionStrategy()
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:
@@ -352,11 +356,18 @@ def main() -> None:
             _start_websocket(settings, signer, ws_market_cache, active_tickers, shutdown_event)
             ws_started = True
 
+        seen_tickers: set[str] = set()
         for market in markets:
             market = _apply_ws_cache(market, ws_market_cache)
-            sig = strategy.evaluate(market)
-            if sig and _passes_signal_filters(sig, settings):
-                signals.append(sig)
+
+            for strat in (strategy, mean_reversion):
+                sig = strat.evaluate(market)
+                if sig and _passes_signal_filters(sig, settings):
+                    # Deduplicate: one signal per (ticker, side, strategy)
+                    key = (sig.ticker, sig.side, sig.strategy)
+                    if key not in seen_tickers:
+                        seen_tickers.add(key)
+                        signals.append(sig)
 
         render_signals(signals)
 
