@@ -12,6 +12,7 @@ from rich.table import Table
 
 from .auth import KalshiSigner
 from .client import KalshiHttpClient
+from .coinbase_prediction import CoinbasePredictionClient, CoinbasePredictionConfig
 from .config import Settings
 from .executor import ExecutionEngine
 from .journal import TradeJournal
@@ -19,8 +20,12 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
-from .golf_strategy import GolfValueStrategy
 from .ws import KalshiWebSocket
+
+try:
+    from .golf_strategy import GolfValueStrategy
+except ImportError:
+    GolfValueStrategy = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 console = Console()
@@ -34,6 +39,27 @@ def build_clients(settings: Settings):
     if settings.api_key_id and settings.private_key_path:
         signer = KalshiSigner(settings.private_key_path, settings.api_key_id)
         private_client = KalshiHttpClient(settings.base_url, signer=signer)
+
+    if settings.prediction_market_venue.startswith("coinbase"):
+        delegate = private_client or public_client
+        mode = (
+            "native"
+            if settings.prediction_market_venue == "coinbase_native"
+            else settings.coinbase_prediction_mode
+        )
+        coinbase_client = CoinbasePredictionClient(
+            config=CoinbasePredictionConfig(
+                mode=mode,
+                native_base_url=settings.coinbase_prediction_base_url,
+            ),
+            kalshi_client=delegate,
+        )
+        logging.info(
+            "venue: Coinbase prediction market mode=%s venue=%s",
+            mode,
+            settings.prediction_market_venue,
+        )
+        return coinbase_client, coinbase_client if private_client else None, signer
 
     return public_client, private_client, signer
 
@@ -317,7 +343,13 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    golf_strategy = GolfValueStrategy(api_client, settings) if settings.enable_golf_strategy else None
+    if settings.enable_golf_strategy and GolfValueStrategy is None:
+        logging.warning("golf strategy requested but module is unavailable; disabling golf layer")
+    golf_strategy = (
+        GolfValueStrategy(api_client, settings)
+        if settings.enable_golf_strategy and GolfValueStrategy is not None
+        else None
+    )
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:

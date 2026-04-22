@@ -23,6 +23,9 @@ class Settings:
     private_key_path: str = os.getenv("KALSHI_PRIVATE_KEY_PATH", "")
     base_url: str = os.getenv("KALSHI_BASE_URL", "https://demo-api.kalshi.co/trade-api/v2")
     ws_url: str = os.getenv("KALSHI_WS_URL", "wss://demo-api.kalshi.co/trade-api/ws/v2")
+    prediction_market_venue: str = os.getenv("PREDICTION_MARKET_VENUE", "kalshi").lower()
+    coinbase_prediction_mode: str = os.getenv("COINBASE_PREDICTION_MODE", "kalshi_powered").lower()
+    coinbase_prediction_base_url: str = os.getenv("COINBASE_PREDICTION_BASE_URL", "")
     category_filter: Optional[list[str]] = None
     min_daily_volume: int = int(os.getenv("MIN_DAILY_VOLUME", "200"))
     max_position_per_market: int = int(os.getenv("MAX_POSITION_PER_MARKET", "5"))
@@ -123,6 +126,20 @@ class Settings:
                 self.live_side_mode,
             )
             self.live_side_mode = "both"
+
+        if self.prediction_market_venue not in {"kalshi", "coinbase_kalshi", "coinbase_native"}:
+            logging.warning(
+                "Unknown PREDICTION_MARKET_VENUE=%s; defaulting to kalshi",
+                self.prediction_market_venue,
+            )
+            self.prediction_market_venue = "kalshi"
+
+        if self.coinbase_prediction_mode not in {"kalshi_powered", "native"}:
+            logging.warning(
+                "Unknown COINBASE_PREDICTION_MODE=%s; defaulting to kalshi_powered",
+                self.coinbase_prediction_mode,
+            )
+            self.coinbase_prediction_mode = "kalshi_powered"
 
         if self.auto_sizing and self.bankroll_cents <= 0:
             logging.warning(
