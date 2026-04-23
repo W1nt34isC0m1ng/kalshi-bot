@@ -13,6 +13,7 @@ from .coinbase import (
     ASSET_CONFIG,
     asset_prefix_from_ticker,
     compute_d2,
+    compute_implied_vol,
     fetch_5m_momentum,
     fetch_rolling_vol,
     fetch_spot,
@@ -41,6 +42,34 @@ class MeanReversionStrategy:
     vol_regime_high_mult: float = 1.2
     vol_regime_low_mult: float = 0.8
     max_trend_strength: float = 1.5  # block MR when directional move exceeds 1.5σ
+    max_d2: float = 1.2              # same overconfidence guard as CryptoProbStrategy
+
+    def _resolve_sigma(
+        self,
+        market_price: float,
+        spot: float,
+        strike: float,
+        secs_left: float,
+        vol_mult: float,
+    ) -> float:
+        """max(realized, implied) sigma — same logic as CryptoProbStrategy."""
+        hist_sigma = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
+        if hist_sigma is None:
+            hist_sigma = 0.80 * vol_mult
+
+        market_frac = market_price / 100.0
+        implied = compute_implied_vol(market_frac, spot, strike, secs_left)
+
+        if implied is not None:
+            sigma = max(hist_sigma, implied)
+            logging.debug(
+                "mean_reversion: sigma hist=%.2f implied=%.2f → using %.2f",
+                hist_sigma, implied, sigma,
+            )
+        else:
+            sigma = hist_sigma
+
+        return sigma
 
     def _anti_momentum_boost(self, product: str, spot_now: float, side: str) -> float:
         """Boost confidence when 5-minute momentum opposes trade direction.
@@ -127,10 +156,9 @@ class MeanReversionStrategy:
                 return None
 
         # ---- volatility ------------------------------------------- #
-        # fetch_rolling_vol also populates the candle cache for fetch_5m_momentum
-        sigma = fetch_rolling_vol(product, vol_mult=vol_mult, lookback_minutes=20)
-        if sigma is None:
-            sigma = 0.80 * vol_mult
+        # Uses max(realized, implied) so sigma is never lower than what the
+        # Kalshi market itself is pricing in.
+        sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
 
         # ---- trend filter ----------------------------------------- #
         # Mean reversion is the wrong tool in a trending market. Measure how
@@ -146,6 +174,16 @@ class MeanReversionStrategy:
 
         # ---- moneyness -------------------------------------------- #
         d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
+
+        # Cap d2: same overconfidence guard as CryptoProbStrategy.
+        # High d2 means the model thinks outcome is "certain" — but only if sigma
+        # is correct. Backtest showed d2 > 1.5 → 0% win rate.
+        if d2 > self.max_d2:
+            logging.debug(
+                "mean_reversion: REJECT %s d2 too high: %.2f > %.2f (overconfidence guard)",
+                market.ticker, d2, self.max_d2,
+            )
+            return None
 
         # Require meaningful distance from ATM — no edge in fading noise
         if d2 < 0.5:

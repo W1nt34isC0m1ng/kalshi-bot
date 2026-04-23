@@ -47,6 +47,90 @@ def norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def norm_ppf(p: float) -> float:
+    """Inverse normal CDF via Acklam's rational approximation (error < 1e-9).
+
+    Used to back out implied vol from binary option prices without scipy.
+    Reference: Peter Acklam, https://web.archive.org/web/20151030215612/
+               http://home.online.no/~pjacklam/notes/invnorm/
+    """
+    p = max(1e-9, min(1 - 1e-9, p))
+
+    a = (-3.969683028665376e+01,  2.209460984245205e+02,
+         -2.759285104469687e+02,  1.383577518672690e+02,
+         -3.066479806614716e+01,  2.506628277459239e+00)
+    b = (-5.447609879822406e+01,  1.615858368580409e+02,
+         -1.556989798598866e+02,  6.680131188771972e+01,
+         -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01,
+         -2.400758277161838e+00, -2.549732539343734e+00,
+          4.374664141464968e+00,  2.938163982698783e+00)
+    d = ( 7.784695709041462e-03,  3.224671290700398e-01,
+          2.445134137142996e+00,  3.754408661907416e+00)
+
+    p_lo, p_hi = 0.02425, 1.0 - 0.02425
+
+    if p < p_lo:
+        q = math.sqrt(-2.0 * math.log(p))
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+               ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1.0)
+    elif p <= p_hi:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / \
+               (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1.0)
+    else:
+        q = math.sqrt(-2.0 * math.log(1.0 - p))
+        return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / \
+                ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1.0)
+
+
+def compute_implied_vol(
+    market_price_frac: float,
+    spot: float,
+    strike: float,
+    secs_left: float,
+) -> float | None:
+    """Back out annualized vol implied by the binary option's market price.
+
+    For a binary call (YES contract): market_price = N(d2)
+      → d2_implied = N^{-1}(market_price)
+      → sigma_implied = log(spot/strike) / (d2_implied * sqrt(T))
+
+    Returns None when the inputs are degenerate (extreme prices, near-expiry,
+    spot == strike, etc.).  Caller should fall back to historical sigma.
+
+    Key insight: if the Kalshi market is pricing YES at 0.30 but our model
+    says fair=0.85, one of two things is true — either the market is wrong
+    (edge!) or our sigma is far too low.  This function tells us which.
+    """
+    if not (0.03 <= market_price_frac <= 0.97):
+        return None
+    if spot <= 0 or strike <= 0 or secs_left < 30:
+        return None
+
+    log_moneyness = math.log(spot / strike)
+    if abs(log_moneyness) < 1e-8:
+        return None  # exactly ATM — d2=0, sigma undefined
+
+    t_years = secs_left / (365.25 * 24 * 3600)
+    sqrt_t = math.sqrt(max(t_years, 1e-12))
+
+    d2_implied = norm_ppf(market_price_frac)
+    if abs(d2_implied) < 1e-6:
+        return None
+
+    sigma_implied = log_moneyness / (d2_implied * sqrt_t)
+
+    # Negative implied vol means the market price and log-moneyness have
+    # inconsistent signs — a stale quote or model mismatch. Discard.
+    if sigma_implied <= 0:
+        return None
+
+    # Clamp to a sane range — below 0.20 is noise; above 10.0 is a bad quote
+    return max(0.20, min(10.0, sigma_implied))
+
+
 def prob_above_strike(
     spot_now: float,
     strike_price: float,
@@ -214,7 +298,7 @@ def fetch_rolling_vol(product: str, vol_mult: float = 1.0, lookback_minutes: int
 
         minutes_per_year = 365.25 * 24 * 60
         sigma = std_per_minute * math.sqrt(minutes_per_year) * vol_mult
-        sigma = max(0.20, min(2.50, sigma))
+        sigma = max(0.50, min(4.00, sigma))  # floor raised: <0.25 had 20% win rate in backtest
 
         _vol_cache[product] = (sigma, now_mono)
 

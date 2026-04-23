@@ -9,6 +9,7 @@ from .coinbase import (
     ASSET_CONFIG,
     asset_prefix_from_ticker,
     compute_d2,
+    compute_implied_vol,
     fetch_5m_momentum,
     fetch_rolling_vol,
     fetch_spot,
@@ -23,16 +24,55 @@ class CryptoProbStrategy:
     client: KalshiHttpClient | None = None
 
     min_edge_cents: int = 6
-    max_edge_cents: int = 30  # tighter than 45 — implausible edges indicate model error
+    max_edge_cents: int = 30
     max_spread_cents: int = 10
     min_score: float = 6.0
     momentum_scaling_factor: float = 0.15
+    # Backtest showed d2 > 1.5 → 0% win rate because sigma is miscalibrated.
+    # We cap at 1.2 to stay in the zone where the model is actually reliable.
+    max_d2: float = 1.2
+
+    def _resolve_sigma(
+        self,
+        market_price: float,
+        spot: float,
+        strike: float,
+        secs_left: float,
+        vol_mult: float,
+    ) -> float:
+        """Best available sigma estimate.
+
+        Priority:
+          1. Market-implied vol from Kalshi mid-price  — the market itself
+             is pricing how uncertain the outcome is. Use it when available.
+          2. Rolling 20-min realized vol from Coinbase candles.
+          3. Hard fallback.
+
+        We take max(implied, historical) so we never use a sigma the market
+        is already telling us is too low.
+        """
+        # Historical realized vol (also warms the candle cache)
+        hist_sigma = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
+        if hist_sigma is None:
+            hist_sigma = 0.80 * vol_mult
+
+        # Market-implied vol — back out sigma from the Kalshi mid-price
+        market_frac = market_price / 100.0
+        implied = compute_implied_vol(market_frac, spot, strike, secs_left)
+
+        if implied is not None:
+            sigma = max(hist_sigma, implied)
+            logging.debug(
+                "strategy: sigma hist=%.2f implied=%.2f → using %.2f",
+                hist_sigma, implied, sigma,
+            )
+        else:
+            sigma = hist_sigma
+
+        return sigma
 
     def _momentum_boost(self, spot_now: float, product: str, side: str) -> float:
-        """Confidence boost when 5-minute momentum aligns with trade direction.
-
-        Reuses candles already cached by fetch_rolling_vol — no extra API call.
-        """
+        """Confidence boost when 5-minute momentum aligns with trade direction."""
         try:
             return_5m = fetch_5m_momentum(product, spot_now)
             if side == "yes" and return_5m > 0:
@@ -98,9 +138,21 @@ class CryptoProbStrategy:
                 return None
 
         # ---- volatility ------------------------------------------- #
-        sigma = fetch_rolling_vol(product, vol_mult=vol_mult, lookback_minutes=20)
-        if sigma is None:
-            sigma = 0.80 * vol_mult
+        # Uses max(realized, implied) so sigma is never lower than what the
+        # Kalshi market itself is pricing in.
+        sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
+
+        # ---- d2 guard --------------------------------------------- #
+        # High d2 = model thinks outcome is "nearly certain" but this is only
+        # true if sigma is correct. Since sigma can still be off, we cap d2
+        # to avoid the overconfident deep-OTM/ITM zone that lost 100% in backtest.
+        d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
+        if d2 > self.max_d2:
+            logging.debug(
+                "strategy: REJECT %s d2 too high: %.2f > %.2f (overconfidence guard)",
+                market.ticker, d2, self.max_d2,
+            )
+            return None
 
         # ---- probability and edge ---------------------------------- #
         fair_prob = prob_above_strike(
@@ -126,13 +178,9 @@ class CryptoProbStrategy:
         side = "yes" if raw_edge > 0 else "no"
 
         # ---- confidence (smooth sigmoid over d2) ------------------- #
-        # tanh maps d2 ∈ [0,∞) → [0,1) smoothly, eliminating cliff edges at
-        # the 0.5/1.0/2.0 thresholds of the old step function.
-        d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
         confidence = 0.55 + 0.45 * math.tanh(d2)
 
         # ---- momentum boost --------------------------------------- #
-        # Called after vol fetch — candles are already cached, no extra API call.
         momentum_boost = self._momentum_boost(spot_now, product, side)
         confidence = min(1.0, confidence + momentum_boost)
 
@@ -141,7 +189,6 @@ class CryptoProbStrategy:
         ev_cents = abs(raw_edge)
         ev_roi = ev_cents / max(premium_cents, 1e-9)
 
-        # 0.15¢ per cent of spread accounts for maker fill risk at expiry
         spread_penalty = spread * 0.15
         adjusted_edge = (abs(raw_edge) * confidence) - spread_penalty
 
