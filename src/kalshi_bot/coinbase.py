@@ -236,6 +236,70 @@ def get_average_vol_5d(product: str) -> float | None:
     return sum(history) / len(history)
 
 
+def fetch_trend_strength(product: str, spot_now: float, sigma: float, lookback_minutes: int = 20) -> float:
+    """Trend strength: total directional move over lookback, normalized by expected vol.
+
+    Returns a z-score-style value:
+      < 1.0  → quiet / ranging — mean reversion has a good environment
+      1.0–1.5 → moderate trend — borderline
+      > 1.5  → strong trend — mean reversion should stand down
+
+    Reuses candles already cached by fetch_rolling_vol, so no extra API call.
+    Also checks directional consistency: what fraction of 1-min candles moved
+    the same way as the overall trend, to distinguish a smooth trend from a
+    noisy spike that happens to net a big move.
+    """
+    now_mono = time.monotonic()
+    cached_candles, cached_at = _candles_cache.get(product, ([], 0.0))
+
+    if not cached_candles or (now_mono - cached_at) >= _VOL_CACHE_TTL:
+        return 0.0
+
+    if len(cached_candles) < 5:
+        return 0.0
+
+    # Find candle closest to lookback_minutes ago
+    target_ts = time.time() - (lookback_minutes * 60)
+    past_candle = min(cached_candles, key=lambda c: abs(c[0] - target_ts))
+    spot_past = float(past_candle[4])
+
+    if spot_past <= 0 or sigma <= 0:
+        return 0.0
+
+    # Total log return over window (unsigned)
+    log_return = abs(math.log(spot_now / spot_past))
+
+    # Expected vol over the same window
+    t_years = (lookback_minutes * 60) / (365.25 * 24 * 3600)
+    expected_move = sigma * math.sqrt(max(t_years, 1e-12))
+
+    magnitude = log_return / expected_move
+
+    # Directional consistency: fraction of 1-min candles that closed in the
+    # direction of the overall trend.  A smooth trend has consistency > 0.6;
+    # a spike-and-reverse has consistency closer to 0.5.
+    direction = 1 if spot_now >= spot_past else -1
+    recent = cached_candles[-lookback_minutes:]
+    if len(recent) >= 2:
+        same_dir = sum(
+            1 for i in range(1, len(recent))
+            if (float(recent[i][4]) - float(recent[i - 1][4])) * direction > 0
+        )
+        consistency = same_dir / (len(recent) - 1)
+    else:
+        consistency = 0.5
+
+    # Blend magnitude and consistency: a big move with consistent direction
+    # is a much stronger trend signal than a big move with random candles.
+    trend_strength = magnitude * (0.5 + consistency)
+
+    logging.debug(
+        "coinbase: trend_strength %s magnitude=%.2f consistency=%.2f strength=%.2f",
+        product, magnitude, consistency, trend_strength,
+    )
+    return trend_strength
+
+
 def fetch_5m_momentum(product: str, spot_now: float) -> float:
     """5-minute price return: (spot_now - spot_5m_ago) / spot_5m_ago.
 

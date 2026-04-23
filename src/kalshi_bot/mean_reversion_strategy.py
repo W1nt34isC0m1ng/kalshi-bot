@@ -17,6 +17,7 @@ from .coinbase import (
     fetch_rolling_vol,
     fetch_spot,
     fetch_spot_at_open,
+    fetch_trend_strength,
     get_average_vol_5d,
     prob_above_strike,
 )
@@ -39,6 +40,7 @@ class MeanReversionStrategy:
     min_score: float = 4.0
     vol_regime_high_mult: float = 1.2
     vol_regime_low_mult: float = 0.8
+    max_trend_strength: float = 1.5  # block MR when directional move exceeds 1.5σ
 
     def _anti_momentum_boost(self, product: str, spot_now: float, side: str) -> float:
         """Boost confidence when 5-minute momentum opposes trade direction.
@@ -130,6 +132,18 @@ class MeanReversionStrategy:
         if sigma is None:
             sigma = 0.80 * vol_mult
 
+        # ---- trend filter ----------------------------------------- #
+        # Mean reversion is the wrong tool in a trending market. Measure how
+        # far price has moved over the last 20 minutes relative to expected vol.
+        # Strength > 1.5σ means the market is directional — stand down.
+        trend_strength = fetch_trend_strength(product, spot_now, sigma, lookback_minutes=20)
+        if trend_strength > self.max_trend_strength:
+            logging.info(
+                "mean_reversion: REJECT %s trending market (strength=%.2f > %.2f)",
+                market.ticker, trend_strength, self.max_trend_strength,
+            )
+            return None
+
         # ---- moneyness -------------------------------------------- #
         d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
 
@@ -190,9 +204,9 @@ class MeanReversionStrategy:
 
         logging.info(
             "mean_reversion: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
-            "raw_edge=%.1f d2=%.2f conf=%.2f vol_boost=%.2f anti_mom=%.2f score=%.2f size=%d sigma=%.2f",
+            "raw_edge=%.1f d2=%.2f conf=%.2f vol_boost=%.2f anti_mom=%.2f trend=%.2f score=%.2f size=%d sigma=%.2f",
             market.ticker, side, spot_now, strike_price, market_price, fair_cents,
-            raw_edge, d2, confidence, vol_boost, anti_momentum, adjusted_edge, position_size, sigma,
+            raw_edge, d2, confidence, vol_boost, anti_momentum, trend_strength, adjusted_edge, position_size, sigma,
         )
 
         return Signal(
@@ -209,7 +223,7 @@ class MeanReversionStrategy:
                 f"mean_rev: spot={spot_now:.2f}, strike={strike_price:.2f}, "
                 f"d2={d2:.2f}, conf={confidence:.2f}, vol={sigma:.2f}, "
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, "
-                f"ev={ev_cents:.1f}, ev_roi={ev_roi:.4f}, size={position_size}"
+                f"ev={ev_cents:.1f}, ev_roi={ev_roi:.4f}, trend={trend_strength:.2f}, size={position_size}"
             ),
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
