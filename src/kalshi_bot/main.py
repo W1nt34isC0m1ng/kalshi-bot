@@ -315,7 +315,7 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    mean_reversion = MeanReversionStrategy()
+    # mean_reversion = MeanReversionStrategy()  # disabled: focusing on crypto_prob
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:
@@ -360,7 +360,7 @@ def main() -> None:
         for market in markets:
             market = _apply_ws_cache(market, ws_market_cache)
 
-            for strat in (strategy, mean_reversion):
+            for strat in (strategy,):  # mean_reversion disabled — crypto_prob only
                 sig = strat.evaluate(market)
                 if sig and _passes_signal_filters(sig, settings):
                     # Deduplicate: one signal per (ticker, side, strategy)
