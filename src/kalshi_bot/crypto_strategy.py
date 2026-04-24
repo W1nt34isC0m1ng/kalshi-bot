@@ -14,6 +14,7 @@ from .coinbase import (
     fetch_rolling_vol,
     fetch_spot,
     fetch_spot_at_open,
+    fetch_trend_strength,
     prob_above_strike,
 )
 from .models import Market, Signal
@@ -31,6 +32,11 @@ class CryptoProbStrategy:
     # Backtest showed d2 > 1.5 → 0% win rate because sigma is miscalibrated.
     # We cap at 1.2 to stay in the zone where the model is actually reliable.
     max_d2: float = 1.2
+    # Block trades that bet AGAINST a confirmed directional trend.
+    # A NO bet in an uptrend (or YES in a downtrend) fought momentum and caused
+    # most of April 22's losses. fetch_trend_strength returns a signed value:
+    # positive = uptrend, negative = downtrend.
+    max_trend_strength: float = 1.0
 
     def _resolve_sigma(
         self,
@@ -177,6 +183,23 @@ class CryptoProbStrategy:
 
         side = "yes" if raw_edge > 0 else "no"
 
+        # ---- directional trend filter ----------------------------- #
+        # Only block trades that OPPOSE a confirmed trend. A NO bet into a
+        # rising market (or YES into a falling one) is the primary failure mode
+        # from April 22 — crypto_prob kept calling the market wrong because BTC
+        # had sustained directional momentum the BS model doesn't account for.
+        # Trend-aligned trades (NO in downtrend, YES in uptrend) are allowed
+        # through — those benefit from momentum, not fight it.
+        trend = fetch_trend_strength(product, spot_now, sigma, lookback_minutes=20)
+        if abs(trend) > self.max_trend_strength:
+            opposing = (side == "no" and trend > 0) or (side == "yes" and trend < 0)
+            if opposing:
+                logging.info(
+                    "strategy: REJECT %s side=%s opposes trend (trend=%.2f, threshold=%.2f)",
+                    market.ticker, side, trend, self.max_trend_strength,
+                )
+                return None
+
         # ---- confidence (smooth sigmoid over d2) ------------------- #
         confidence = 0.55 + 0.45 * math.tanh(d2)
 
@@ -198,9 +221,9 @@ class CryptoProbStrategy:
 
         logging.info(
             "strategy: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
-            "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f",
+            "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f trend=%.2f",
             market.ticker, side, spot_now, strike_price, market_price, fair_cents,
-            raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left,
+            raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left, trend,
         )
 
         return Signal(

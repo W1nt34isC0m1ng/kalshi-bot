@@ -375,11 +375,13 @@ def fetch_trend_strength(product: str, spot_now: float, sigma: float, lookback_m
 
     # Blend magnitude and consistency: a big move with consistent direction
     # is a much stronger trend signal than a big move with random candles.
-    trend_strength = magnitude * (0.5 + consistency)
+    # Return signed: positive = uptrend, negative = downtrend.
+    # Callers that only care about magnitude should use abs(result).
+    trend_strength = direction * magnitude * (0.5 + consistency)
 
     logging.debug(
-        "coinbase: trend_strength %s magnitude=%.2f consistency=%.2f strength=%.2f",
-        product, magnitude, consistency, trend_strength,
+        "coinbase: trend_strength %s magnitude=%.2f consistency=%.2f direction=%+d strength=%.2f",
+        product, magnitude, consistency, direction, trend_strength,
     )
     return trend_strength
 

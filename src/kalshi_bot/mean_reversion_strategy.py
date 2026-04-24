@@ -165,7 +165,7 @@ class MeanReversionStrategy:
         # far price has moved over the last 20 minutes relative to expected vol.
         # Strength > 1.5σ means the market is directional — stand down.
         trend_strength = fetch_trend_strength(product, spot_now, sigma, lookback_minutes=20)
-        if trend_strength > self.max_trend_strength:
+        if abs(trend_strength) > self.max_trend_strength:
             logging.info(
                 "mean_reversion: REJECT %s trending market (strength=%.2f > %.2f)",
                 market.ticker, trend_strength, self.max_trend_strength,
