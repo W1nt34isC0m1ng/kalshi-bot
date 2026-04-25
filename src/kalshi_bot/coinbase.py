@@ -290,15 +290,34 @@ def fetch_rolling_vol(product: str, vol_mult: float = 1.0, lookback_minutes: int
 
         _candles_cache[product] = (candles, now_mono)
 
-        closes = [float(c[4]) for c in candles[-lookback_minutes:]]
-        log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+        # Parkinson HLOC estimator. Uses each candle's high/low range, which is
+        # ~5x more statistically efficient than close-to-close because it captures
+        # intra-minute movement we'd otherwise discard. Coinbase candle format:
+        # [time, low, high, open, close, volume].
+        # Variance per minute = (1 / (4 ln 2)) * mean( ln(H/L)^2 )
+        # Diagnostic in trade journal showed close-to-close was hitting the 0.50
+        # floor 41% of the time; trades fired at the floor won at 14% vs 37%
+        # otherwise. Switching estimators removes the need for an aggressive floor.
+        recent = candles[-lookback_minutes:]
+        hl_terms = []
+        for c in recent:
+            low, high = float(c[1]), float(c[2])
+            if low > 0 and high > low:
+                hl_terms.append(math.log(high / low) ** 2)
 
-        variance = sum(r ** 2 for r in log_returns) / len(log_returns)
-        std_per_minute = math.sqrt(max(variance, 1e-20))
+        if len(hl_terms) < 5:
+            logging.warning("coinbase: insufficient HL ranges for vol estimate (%s)", product)
+            return None
+
+        parkinson_var = sum(hl_terms) / len(hl_terms) / (4 * math.log(2))
+        std_per_minute = math.sqrt(max(parkinson_var, 1e-20))
 
         minutes_per_year = 365.25 * 24 * 60
         sigma = std_per_minute * math.sqrt(minutes_per_year) * vol_mult
-        sigma = max(0.50, min(4.00, sigma))  # floor raised: <0.25 had 20% win rate in backtest
+        # Low safety floor only for degenerate data (flat candles → sigma → 0
+        # → d2 → infinity, model thinks every trade is a sure thing). Parkinson
+        # gives us realistic numbers, so this should rarely bind.
+        sigma = max(0.10, min(4.00, sigma))
 
         _vol_cache[product] = (sigma, now_mono)
 

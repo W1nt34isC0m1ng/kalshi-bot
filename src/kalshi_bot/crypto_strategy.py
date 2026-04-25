@@ -29,8 +29,13 @@ class CryptoProbStrategy:
     max_spread_cents: int = 10
     min_score: float = 6.0
     momentum_scaling_factor: float = 0.15
-    # Backtest showed d2 > 1.5 → 0% win rate because sigma is miscalibrated.
-    # We cap at 1.2 to stay in the zone where the model is actually reliable.
+    # Cap on |d2| (model confidence). Originally added because high d2 had 0%
+    # WR — but that was because sigma was floored at 0.50, producing spuriously
+    # confident model output. Now that Parkinson HLOC gives realistic sigma,
+    # journal data shows d2 > 1.2 wins ~44% of the time. The cap stays for a
+    # *different* reason: deep-strike trades have brutally asymmetric payoffs
+    # (win +8c, lose -92c on a NO@92), so even 44% WR is a structural loser.
+    # Per-trade pnl in d2 1.2-1.5 was -63c vs -32c at 0.9-1.2 (real-sigma data).
     max_d2: float = 1.2
     # Block trades that bet AGAINST a confirmed directional trend.
     # A NO bet in an uptrend (or YES in a downtrend) fought momentum and caused
