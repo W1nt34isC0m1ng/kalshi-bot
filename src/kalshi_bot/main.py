@@ -345,6 +345,13 @@ def main() -> None:
             _reconcile_positions(private_client, risk)
             last_position_reconcile = time.monotonic()
 
+        # In DRY_RUN there's no exchange to reconcile against, so positions
+        # accumulate forever in `risk_state.json` until the notional cap
+        # saturates. Drop entries for markets whose expiry has passed every
+        # poll loop. Cheap (one regex per ticker) and idempotent.
+        if settings.dry_run:
+            risk.prune_expired_markets()
+
         signals = []
         markets = list(market_data.iter_open_markets(limit_per_page=200))
 

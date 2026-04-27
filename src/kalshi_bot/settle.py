@@ -24,6 +24,8 @@ from pathlib import Path
 
 import requests
 
+from .tickers import parse_expiry_utc
+
 
 # ------------------------------------------------------------------ #
 # Configuration                                                       #
@@ -33,19 +35,9 @@ import requests
 # Anything else (cooldown, blocked, shadow_*, etc.) didn't actually trade.
 SETTLEABLE_STATUSES = {"dry_run", "filled", "accepted"}
 
-# Eastern (Kalshi market) time zone offset relative to UTC for ticker parsing.
-# Kalshi ticker timestamps are in EDT/EST. We use a fixed -4 offset (EDT);
-# when DST ends, this becomes a 1-hour bug — fix at that point if still relevant.
-KALSHI_TZ = timezone(timedelta(hours=-4))
-
 # Margin after expiry before we'll attempt to settle (gives Coinbase time to
 # publish the closing minute candle).
 SETTLE_GRACE_SECONDS = 90
-
-MONTHS = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
-}
 
 
 OUTCOME_FIELDS = [
@@ -65,38 +57,8 @@ OUTCOME_FIELDS = [
 
 
 # ------------------------------------------------------------------ #
-# Ticker parsing                                                      #
+# Ticker → Coinbase product                                           #
 # ------------------------------------------------------------------ #
-
-_TICKER_RE = re.compile(r"^KX(BTC|ETH)15M-(\d{2})(\w{3})(\d{2})(\d{2})(\d{2})-")
-
-
-def parse_expiry_utc(ticker: str) -> datetime | None:
-    """Parse the option expiry from a Kalshi 15-min ticker.
-
-    Format: ``KX{ASSET}15M-{YY}{MMM}{DD}{HH}{MM}-{STRIKE_CODE}``
-    Date/time is in Eastern (Kalshi) time. Returns timezone-aware UTC datetime
-    or None if the ticker doesn't match the expected shape.
-    """
-    m = _TICKER_RE.match(ticker.upper() if ticker else "")
-    if not m:
-        return None
-    _asset, yy, mmm, dd, hh, mn = m.groups()
-    if mmm not in MONTHS:
-        return None
-    try:
-        et = datetime(
-            year=2000 + int(yy),
-            month=MONTHS[mmm],
-            day=int(dd),
-            hour=int(hh),
-            minute=int(mn),
-            tzinfo=KALSHI_TZ,
-        )
-    except ValueError:
-        return None
-    return et.astimezone(timezone.utc)
-
 
 def coinbase_product_for(ticker: str) -> str | None:
     if ticker.upper().startswith("KXBTC15M"):

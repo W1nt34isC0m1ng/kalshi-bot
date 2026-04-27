@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
 from .models import OrderIntent
+from .tickers import parse_expiry_utc
 
 
 class RiskManager:
@@ -103,6 +105,57 @@ class RiskManager:
             len(positions),
             self.total_notional_cents,
         )
+
+    # ------------------------------------------------------------------ #
+    # Expiry-based pruning (DRY_RUN mode)                                  #
+    # ------------------------------------------------------------------ #
+
+    def prune_expired_markets(self, now_utc: datetime | None = None) -> int:
+        """Drop positions on markets whose expiry has passed.
+
+        In live mode, `reconcile_from_positions` rebuilds risk state from the
+        exchange every poll cycle, so stale positions naturally evaporate. In
+        DRY_RUN mode there's no exchange to reconcile against, and `mark_sent`
+        accumulates fake positions forever. Without this method, the portfolio
+        notional cap eventually saturates with ghost positions on expired
+        markets and starts blocking otherwise-valid signals.
+
+        Returns the number of tickers pruned. Caller is responsible for
+        calling this on a sensible cadence (typically once per poll loop).
+        """
+        if not self.market_position_counts:
+            return 0
+
+        if now_utc is None:
+            now_utc = datetime.now(timezone.utc)
+
+        expired = []
+        for ticker in list(self.market_position_counts.keys()):
+            expiry = parse_expiry_utc(ticker)
+            # Unparseable tickers stay — better than dropping a real position
+            # because of a parser miss.
+            if expiry is None:
+                continue
+            if expiry < now_utc:
+                expired.append(ticker)
+
+        if not expired:
+            return 0
+
+        for ticker in expired:
+            self.market_position_counts.pop(ticker, None)
+            notional = self.market_notional_cents.pop(ticker, 0)
+            self.total_notional_cents -= notional
+
+        # Floor at 0 in case of arithmetic drift from imports of historical state
+        self.total_notional_cents = max(0, self.total_notional_cents)
+        self._save_state()
+
+        logging.info(
+            "risk: pruned %d expired markets — total_notional now %d cents",
+            len(expired), self.total_notional_cents,
+        )
+        return len(expired)
 
     # ------------------------------------------------------------------ #
     # Core risk checks                                                     #
