@@ -11,6 +11,30 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ## [Unreleased] — branch `experiment/parkinson-sigma`
 
+### Fixed
+- **Stale risk state in DRY_RUN mode (silent strangle bug).** In DRY_RUN,
+  `_reconcile_positions` never ran, so `mark_sent` accumulated dry-run "fills"
+  into `risk_state.json` indefinitely. Within ~24 hours the portfolio notional
+  cap (4000c) saturated with ghost positions on already-expired markets,
+  causing the bot to block otherwise-valid signals.
+  - **Damage:** 157 signals blocked over 4 days, including **18 of the 20
+    post-Parkinson signals** we needed for validation. The fix landed before
+    the validation window had statistically meaningful data.
+  - **Fix:** `RiskManager.prune_expired_markets()` drops positions on tickers
+    whose Kalshi-time expiry has passed. Called every poll loop when
+    `settings.dry_run` is True (live mode already handles this via
+    exchange-side reconciliation). Cheap, idempotent.
+  - **Recovery tool:** `kalshi_bot.recover` shadow-settles the 157 blocked
+    signals from the journal and writes them to `logs/recovered_outcomes.csv`
+    (kept distinct from `outcomes.csv` because they didn't actually fire).
+    Confirmed post-Parkinson 50% WR (10W-10L, +$28.56) when combining real
+    fills with shadow-recovered signals.
+
+### Added
+- **`kalshi_bot.tickers`** — shared ticker → expiry parser used by both
+  `settle.py` (outcome resolution) and `risk.py` (expiry-based pruning).
+- **`kalshi_bot.recover`** — see Fixed > Recovery tool above.
+
 ### Changed
 - **Volatility estimator: close-to-close → Parkinson HLOC.**
   `fetch_rolling_vol` now uses each minute candle's high/low range instead of
