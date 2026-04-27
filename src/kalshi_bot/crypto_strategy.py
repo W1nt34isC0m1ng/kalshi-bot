@@ -246,7 +246,7 @@ class CryptoProbStrategy:
                 f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, d2={d2:.2f}, "
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
                 f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
-                f"momentum_boost={momentum_boost:.2f}"
+                f"momentum_boost={momentum_boost:.2f}, trend={trend:.2f}"
             ),
             momentum_boost=momentum_boost,
             yes_bid=market.yes_bid,
