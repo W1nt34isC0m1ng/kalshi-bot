@@ -11,6 +11,7 @@ from .coinbase import (
     compute_d2,
     compute_implied_vol,
     fetch_5m_momentum,
+    fetch_recent_log_drift,
     fetch_rolling_vol,
     fetch_spot,
     fetch_spot_at_open,
@@ -37,6 +38,14 @@ class CryptoProbStrategy:
     # (win +8c, lose -92c on a NO@92), so even 44% WR is a structural loser.
     # Per-trade pnl in d2 1.2-1.5 was -63c vs -32c at 0.9-1.2 (real-sigma data).
     max_d2: float = 1.2
+    # Drift persistence factor. Empirically, recent momentum partially persists
+    # into the next window but decays — assuming 100% persistence (raw drift
+    # estimate) over-shifts fair_prob by ~30pp on typical trends, swamping the
+    # ~10pp calibration gap we're trying to close. 0.15 sizes the correction
+    # to the observed calibration error: a 1%/20min drift becomes a ~9pp shift
+    # in fair_prob at ATM, matching the YES/NO bet bias from journal analysis.
+    # Tunable; raise if still too bullish/bearish, lower if too noisy.
+    drift_persistence: float = 0.15
     # Block trades that bet AGAINST a confirmed directional trend.
     # A NO bet in an uptrend (or YES in a downtrend) fought momentum and caused
     # most of April 22's losses. fetch_trend_strength returns a signed value:
@@ -153,11 +162,23 @@ class CryptoProbStrategy:
         # Kalshi market itself is pricing in.
         sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
 
+        # ---- drift ------------------------------------------------- #
+        # Calibration analysis on 46 post-Parkinson trades found the model
+        # was anti-predictive on side selection — when it disagreed with
+        # market, market was usually right. The likely cause is zero-drift
+        # BS missing the momentum/drift the market is pricing in. Take recent
+        # 20-min realized log-drift per minute, then damp by drift_persistence
+        # to size the correction to the observed calibration error rather
+        # than assuming full momentum persistence (which over-shifts).
+        raw_drift = fetch_recent_log_drift(product, lookback_minutes=20)
+        mu_per_min = raw_drift * self.drift_persistence
+
         # ---- d2 guard --------------------------------------------- #
-        # High d2 = model thinks outcome is "nearly certain" but this is only
-        # true if sigma is correct. Since sigma can still be off, we cap d2
-        # to avoid the overconfident deep-OTM/ITM zone that lost 100% in backtest.
-        d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
+        # The cap protects against asymmetric-payoff zones at deep strikes,
+        # where even high model confidence is a structural loser. Now that
+        # drift is included, |d2| can be inflated by a strong trend pushing
+        # toward the strike — that's still confidence we want to cap.
+        d2 = compute_d2(spot_now, strike_price, secs_left, sigma, mu_per_minute=mu_per_min)
         if d2 > self.max_d2:
             logging.debug(
                 "strategy: REJECT %s d2 too high: %.2f > %.2f (overconfidence guard)",
@@ -171,6 +192,7 @@ class CryptoProbStrategy:
             strike_price=strike_price,
             secs_left=secs_left,
             annualized_vol=sigma,
+            mu_per_minute=mu_per_min,
         )
         fair_cents = fair_prob * 100.0
         raw_edge = fair_cents - market_price
@@ -226,9 +248,9 @@ class CryptoProbStrategy:
 
         logging.info(
             "strategy: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
-            "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f trend=%.2f",
+            "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f trend=%.2f drift=%.5f",
             market.ticker, side, spot_now, strike_price, market_price, fair_cents,
-            raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left, trend,
+            raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left, trend, mu_per_min,
         )
 
         return Signal(
@@ -246,7 +268,8 @@ class CryptoProbStrategy:
                 f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, d2={d2:.2f}, "
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
                 f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
-                f"momentum_boost={momentum_boost:.2f}, trend={trend:.2f}"
+                f"momentum_boost={momentum_boost:.2f}, trend={trend:.2f}, "
+                f"drift={mu_per_min:.5f}"
             ),
             momentum_boost=momentum_boost,
             yes_bid=market.yes_bid,

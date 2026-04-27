@@ -11,6 +11,24 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ## [Unreleased] — branch `experiment/parkinson-sigma`
 
+### Added
+- **Drift-aware Black-Scholes (`mu_per_minute` parameter on `prob_above_strike`
+  and `compute_d2`).** Calibration analysis on 46 post-Parkinson trades found
+  that while the aggregate model was well-calibrated (47% predicted YES vs
+  46% observed), the model was systematically anti-predictive on side
+  selection — wherever it disagreed with the market, the market was right.
+  The likely cause: zero-drift BS missing momentum/drift the market prices in.
+  - Drift estimate is the 20-min realized log-drift per minute, sourced from
+    `fetch_recent_log_drift` (reuses cached candles from `fetch_rolling_vol`).
+  - Damping factor `drift_persistence = 0.15` sizes the correction to the
+    observed ~10pp calibration error rather than assuming full momentum
+    persistence (which would over-shift fair_prob by ~30pp on typical trends).
+  - Falls back to zero drift if the candle cache isn't populated, so behavior
+    is unchanged on the first poll cycle and on any data fetch failure.
+  - Tunable via `CryptoProbStrategy(drift_persistence=...)`. Validation plan:
+    next ~30 trades should show YES-bet observed P(YES) closer to predicted,
+    and ideally a positive edge over the market on side selection.
+
 ### Fixed
 - **Stale risk state in DRY_RUN mode (silent strangle bug).** In DRY_RUN,
   `_reconcile_positions` never ran, so `mark_sent` accumulated dry-run "fills"
