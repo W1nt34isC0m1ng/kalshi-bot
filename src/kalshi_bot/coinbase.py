@@ -136,8 +136,19 @@ def prob_above_strike(
     strike_price: float,
     secs_left: float,
     annualized_vol: float,
+    mu_per_minute: float = 0.0,
 ) -> float:
-    """P(price at expiry > strike) under zero-drift log-normal model — N(d2)."""
+    """P(price at expiry > strike) under log-normal model with optional drift.
+
+    `mu_per_minute` is the expected log-return per minute. When 0 (default),
+    reduces to the original zero-drift Black-Scholes-style binary. When non-zero,
+    shifts the mean of the terminal log-price distribution by mu * (secs_left/60).
+
+    Calibration analysis on 46 post-Parkinson trades found the model was well-
+    calibrated in aggregate but anti-predictive on side selection — the market
+    was pricing in momentum/drift the zero-drift model couldn't see. Adding mu
+    moves the model toward reality in trending markets.
+    """
     if spot_now <= 0 or strike_price <= 0:
         return 0.50
     if secs_left <= 1:
@@ -148,17 +159,55 @@ def prob_above_strike(
     if sigma_t <= 0:
         return 1.0 if spot_now > strike_price else 0.0
 
-    d2 = math.log(spot_now / strike_price) / sigma_t
+    drift_term = mu_per_minute * (secs_left / 60.0)
+    d2 = (math.log(spot_now / strike_price) + drift_term) / sigma_t
     return max(0.02, min(0.98, norm_cdf(d2)))
 
 
-def compute_d2(spot: float, strike: float, secs_left: float, sigma: float) -> float:
-    """Distance from strike in vol units (unsigned moneyness)."""
+def compute_d2(
+    spot: float,
+    strike: float,
+    secs_left: float,
+    sigma: float,
+    mu_per_minute: float = 0.0,
+) -> float:
+    """Distance from strike in vol units (unsigned moneyness with optional drift)."""
     if spot <= 0 or strike <= 0 or sigma <= 0 or secs_left <= 0:
         return 0.0
     t_years = secs_left / (365.25 * 24 * 60 * 60)
     sigma_t = sigma * math.sqrt(max(t_years, 1e-12))
-    return abs(math.log(spot / strike)) / max(sigma_t, 1e-9)
+    drift_term = mu_per_minute * (secs_left / 60.0)
+    return abs(math.log(spot / strike) + drift_term) / max(sigma_t, 1e-9)
+
+
+def fetch_recent_log_drift(product: str, lookback_minutes: int = 20) -> float:
+    """Estimate per-minute log-return drift from recent candles.
+
+    Uses the same candle cache populated by `fetch_rolling_vol`, so no extra
+    API call when called after vol has been computed. Returns 0.0 on any
+    failure path so callers can safely treat missing data as zero-drift.
+
+    Drift = log(close[-1] / close[-lookback]) / lookback. This is naive but
+    cheap and robust — over a 20-min window the noise/signal ratio is decent
+    for trending periods and converges to ~0 for ranging periods. We do NOT
+    cap it because magnitude carries information; if the market is ripping,
+    we want the model to know.
+    """
+    cached = _candles_cache.get(product)
+    if not cached:
+        return 0.0
+    candles, _ = cached
+    if len(candles) < lookback_minutes + 1:
+        return 0.0
+    recent = candles[-(lookback_minutes + 1):]
+    try:
+        old_close = float(recent[0][4])
+        new_close = float(recent[-1][4])
+        if old_close <= 0 or new_close <= 0:
+            return 0.0
+        return math.log(new_close / old_close) / lookback_minutes
+    except (ValueError, IndexError, TypeError):
+        return 0.0
 
 
 def asset_prefix_from_ticker(ticker: str) -> str | None:
@@ -290,15 +339,34 @@ def fetch_rolling_vol(product: str, vol_mult: float = 1.0, lookback_minutes: int
 
         _candles_cache[product] = (candles, now_mono)
 
-        closes = [float(c[4]) for c in candles[-lookback_minutes:]]
-        log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+        # Parkinson HLOC estimator. Uses each candle's high/low range, which is
+        # ~5x more statistically efficient than close-to-close because it captures
+        # intra-minute movement we'd otherwise discard. Coinbase candle format:
+        # [time, low, high, open, close, volume].
+        # Variance per minute = (1 / (4 ln 2)) * mean( ln(H/L)^2 )
+        # Diagnostic in trade journal showed close-to-close was hitting the 0.50
+        # floor 41% of the time; trades fired at the floor won at 14% vs 37%
+        # otherwise. Switching estimators removes the need for an aggressive floor.
+        recent = candles[-lookback_minutes:]
+        hl_terms = []
+        for c in recent:
+            low, high = float(c[1]), float(c[2])
+            if low > 0 and high > low:
+                hl_terms.append(math.log(high / low) ** 2)
 
-        variance = sum(r ** 2 for r in log_returns) / len(log_returns)
-        std_per_minute = math.sqrt(max(variance, 1e-20))
+        if len(hl_terms) < 5:
+            logging.warning("coinbase: insufficient HL ranges for vol estimate (%s)", product)
+            return None
+
+        parkinson_var = sum(hl_terms) / len(hl_terms) / (4 * math.log(2))
+        std_per_minute = math.sqrt(max(parkinson_var, 1e-20))
 
         minutes_per_year = 365.25 * 24 * 60
         sigma = std_per_minute * math.sqrt(minutes_per_year) * vol_mult
-        sigma = max(0.50, min(4.00, sigma))  # floor raised: <0.25 had 20% win rate in backtest
+        # Low safety floor only for degenerate data (flat candles → sigma → 0
+        # → d2 → infinity, model thinks every trade is a sure thing). Parkinson
+        # gives us realistic numbers, so this should rarely bind.
+        sigma = max(0.10, min(4.00, sigma))
 
         _vol_cache[product] = (sigma, now_mono)
 
