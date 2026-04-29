@@ -9,7 +9,26 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased] — branch `experiment/parkinson-sigma`
+## [Unreleased]
+
+(no in-progress changes)
+
+---
+
+## [2026-04-29] — merged `experiment/parkinson-sigma` → main
+
+**Validation summary (69 post-drift trades):**
+- Cumulative WR: 46% (target ≥42%) ✅
+- Net P&L: +$42.08 / +$0.61 per trade ✅
+- YES bets: WR 32% → 43% (+11pp); calibration gap −12pp → −5pp ✅
+- NO bets: WR 42% → 48% (+6pp); calibration gap unchanged at +9pp ⚠️
+
+The drift correction substantially helped YES side. NO side improved on WR
+but calibration gap (model too bearish in 30–50% probability range) is
+unchanged — likely because drift only helps in trending markets, and many
+NO bets fire in ranging markets where vol calibration alone drives the
+decision. The NO-side residual is a separate hypothesis tracked in a new
+experiment branch.
 
 ### Added
 - **Drift-aware Black-Scholes (`mu_per_minute` parameter on `prob_above_strike`
