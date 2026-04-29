@@ -11,6 +11,7 @@ from .coinbase import (
     compute_d2,
     compute_implied_vol,
     fetch_5m_momentum,
+    fetch_close_to_close_vol,
     fetch_recent_log_drift,
     fetch_rolling_vol,
     fetch_spot,
@@ -59,37 +60,54 @@ class CryptoProbStrategy:
         strike: float,
         secs_left: float,
         vol_mult: float,
-    ) -> float:
+    ) -> tuple[float, str, dict]:
         """Best available sigma estimate.
 
-        Priority:
-          1. Market-implied vol from Kalshi mid-price  — the market itself
-             is pricing how uncertain the outcome is. Use it when available.
-          2. Rolling 20-min realized vol from Coinbase candles.
-          3. Hard fallback.
+        Combines three independent estimators and returns the maximum:
+          1. Parkinson HLOC realized vol from 1-min candles (efficient on
+             quiet markets but understates directional moves).
+          2. Close-to-close realized vol from same candles (catches the
+             directional moves Parkinson misses).
+          3. Market-implied vol back-solved from Kalshi mid-price (the
+             market's own view).
 
-        We take max(implied, historical) so we never use a sigma the market
-        is already telling us is too low.
+        We take max(...) so we never use a sigma below what any source is
+        telling us is plausible. This is the conservative direction; the
+        failure mode of low sigma is overconfidence + bleeding mid-vol NO
+        bets at ATM (validated empirically — see CHANGELOG).
+
+        Returns (chosen_sigma, source_name, all_components) so the caller
+        can log which estimator drove the decision.
         """
-        # Historical realized vol (also warms the candle cache)
-        hist_sigma = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
-        if hist_sigma is None:
-            hist_sigma = 0.80 * vol_mult
+        # Historical realized vol via Parkinson (also warms the candle cache
+        # used by c2c, drift, momentum, and trend-strength helpers below)
+        parkinson = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
+        if parkinson is None:
+            parkinson = 0.80 * vol_mult
 
-        # Market-implied vol — back out sigma from the Kalshi mid-price
+        components: dict[str, float] = {"parkinson": parkinson}
+
+        c2c = fetch_close_to_close_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
+        if c2c is not None:
+            components["c2c"] = c2c
+
         market_frac = market_price / 100.0
         implied = compute_implied_vol(market_frac, spot, strike, secs_left)
-
         if implied is not None:
-            sigma = max(hist_sigma, implied)
-            logging.debug(
-                "strategy: sigma hist=%.2f implied=%.2f → using %.2f",
-                hist_sigma, implied, sigma,
-            )
-        else:
-            sigma = hist_sigma
+            components["implied"] = implied
 
-        return sigma
+        source = max(components, key=lambda k: components[k])
+        sigma = components[source]
+
+        logging.debug(
+            "strategy: sigma park=%.2f c2c=%s implied=%s → %.2f (%s)",
+            parkinson,
+            f"{c2c:.2f}" if c2c is not None else "n/a",
+            f"{implied:.2f}" if implied is not None else "n/a",
+            sigma, source,
+        )
+
+        return sigma, source, components
 
     def _momentum_boost(self, spot_now: float, product: str, side: str) -> float:
         """Confidence boost when 5-minute momentum aligns with trade direction."""
@@ -158,9 +176,10 @@ class CryptoProbStrategy:
                 return None
 
         # ---- volatility ------------------------------------------- #
-        # Uses max(realized, implied) so sigma is never lower than what the
-        # Kalshi market itself is pricing in.
-        sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
+        # max(parkinson, c2c, implied) — conservative blend. See _resolve_sigma.
+        sigma, sigma_src, sigma_components = self._resolve_sigma(
+            market_price, spot_now, strike_price, secs_left, vol_mult
+        )
 
         # ---- drift ------------------------------------------------- #
         # Calibration analysis on 46 post-Parkinson trades found the model
@@ -265,9 +284,10 @@ class CryptoProbStrategy:
             score=float(round(adjusted_edge, 2)),
             reason=(
                 f"asset={prefix}, spot={spot_now:.2f}, strike={strike_price:.2f}, "
-                f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, d2={d2:.2f}, "
-                f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
-                f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
+                f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, sigma_src={sigma_src}, "
+                f"d2={d2:.2f}, fair={fair_cents:.1f}, market={market_price:.1f}, "
+                f"ev={ev_cents:.1f}, ev_roi={ev_roi:.4f}, "
+                f"conf={confidence - momentum_boost:.2f}, "
                 f"momentum_boost={momentum_boost:.2f}, trend={trend:.2f}, "
                 f"drift={mu_per_min:.5f}"
             ),

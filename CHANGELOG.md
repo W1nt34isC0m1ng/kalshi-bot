@@ -9,9 +9,37 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased]
+## [Unreleased] — branch `experiment/c2c-blend`
 
-(no in-progress changes)
+### Added
+- **Close-to-close vol estimator (`fetch_close_to_close_vol`).** Complements
+  Parkinson HLOC. Reuses the cached candles, no extra API call.
+- **`sigma_src` field in journal `reason`.** Records which estimator drove
+  the sigma decision (parkinson | c2c | implied) so post-hoc analysis can
+  attribute calibration error to specific estimators.
+
+### Changed
+- **`_resolve_sigma` now blends three estimators: `max(parkinson, c2c, implied)`.**
+  Previously `max(parkinson, implied)`. The diagnostic that motivated this:
+  - n=46 (initial): NO bets in σ 0.30–0.45 had +43pp calibration gap (predicted 40% YES, observed 83%)
+  - n=55 (validation): same bucket showed +26pp gap, n=12 — pattern holds with double the sample
+  - Most NO bets (39/55) outside this bucket are well-calibrated (+2pp to +3pp)
+  - The mid-sigma cohort lost ~$12 over 12 trades alone — a meaningful drag
+
+  Mechanism: Parkinson HLOC is statistically efficient on quiet candles but
+  systematically *understates* vol when 1-min movement is directional rather
+  than ranging (a candle that opens 76,000 closes 76,050 with $1 H/L range
+  has near-zero Parkinson but $50 of real movement). Mid-vol regimes are
+  exactly where directional 1-min moves are most common. The fix lets c2c
+  override Parkinson in these regimes while preserving Parkinson's edge on
+  quiet candles.
+
+  The change is conservative — `max(...)` only *raises* sigma where one
+  estimator says higher. Cannot artificially lower sigma. Validation plan:
+  next 30+ NO trades in the σ 0.30–0.45 bucket should close the gap toward
+  parity with the well-calibrated buckets.
+
+---
 
 ---
 

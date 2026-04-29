@@ -180,6 +180,52 @@ def compute_d2(
     return abs(math.log(spot / strike) + drift_term) / max(sigma_t, 1e-9)
 
 
+def fetch_close_to_close_vol(product: str, vol_mult: float = 1.0, lookback_minutes: int = 20) -> float | None:
+    """Realized annualized vol from minute close-to-close log returns.
+
+    Complements Parkinson HLOC. Parkinson is more efficient on quiet
+    candles but systematically *understates* vol when intra-minute movement
+    is directional rather than ranging — a candle that opens 76,000 and
+    closes 76,050 with a $1 H/L range looks like near-zero Parkinson vol
+    despite being a real $50 move. Close-to-close captures that movement
+    explicitly.
+
+    Used in `_resolve_sigma` as part of `max(parkinson, c2c, implied)` so
+    that the more conservative (higher) estimator always wins. This protects
+    against the directional-Parkinson failure mode without compromising on
+    quiet candles where Parkinson is more efficient.
+
+    Reuses the candle cache populated by `fetch_rolling_vol`. Returns None
+    if cache is cold or has insufficient data.
+    """
+    cached = _candles_cache.get(product)
+    if not cached:
+        return None
+    candles, _ = cached
+    if len(candles) < lookback_minutes + 1:
+        return None
+
+    closes = [float(c[4]) for c in candles[-(lookback_minutes + 1):]]
+    log_returns = []
+    for i in range(1, len(closes)):
+        if closes[i - 1] > 0 and closes[i] > 0:
+            log_returns.append(math.log(closes[i] / closes[i - 1]))
+
+    if len(log_returns) < 5:
+        return None
+
+    # Sample variance (mean-subtracted, n-1 denom). Mean is near zero in
+    # short windows but subtracting it removes drift bias from the vol
+    # estimate, leaving pure dispersion.
+    mean = sum(log_returns) / len(log_returns)
+    var = sum((r - mean) ** 2 for r in log_returns) / max(len(log_returns) - 1, 1)
+    std_per_minute = math.sqrt(max(var, 1e-20))
+
+    minutes_per_year = 365.25 * 24 * 60
+    sigma = std_per_minute * math.sqrt(minutes_per_year) * vol_mult
+    return max(0.10, min(4.00, sigma))
+
+
 def fetch_recent_log_drift(product: str, lookback_minutes: int = 20) -> float:
     """Estimate per-minute log-return drift from recent candles.
 
