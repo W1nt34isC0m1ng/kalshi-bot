@@ -15,6 +15,53 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
+## [2026-04-30] — `experiment/c2c-blend` invalidated, not merged
+
+**Hypothesis:** Parkinson HLOC understates vol on directional 1-min candles
+→ NO bets in σ 0.30–0.45 are systematically miscalibrated by +26pp →
+blending in close-to-close (`max(parkinson, c2c, implied)`) should close
+the leak.
+
+**Result:** invalidated. Pre-revert numbers:
+
+| Window | n | WR | P&L |
+|---|---|---|---|
+| Pre-c2c (post-drift) | 80 | 45% | +$38.88 |
+| Post-c2c-ship | 52 | 29% | −$43.60 |
+| Post-drift cumulative | 134 | 39% | −$3.28 |
+
+The c2c branch ran for ~17 hours and wiped out the entire +$31 of
+accumulated post-drift edge. Statistical test: at n=52 with 15 wins, if
+the true rate were still the 45% pre-c2c baseline, this outcome has
+probability ~1%. That's significant evidence the change was harmful, the
+regime shifted, or both.
+
+**What c2c actually did (mechanistically):**
+- C2c won the `max()` 80% of the time → sigma was raised on most signals
+  (mean ~0.51 vs Parkinson's ~0.45).
+- Implied vol won 1% of the time → market is consistently more confident
+  than realized vol justifies.
+- This validates the structural argument (c2c IS higher than Parkinson)
+  but not the empirical one (raising sigma did not improve outcomes).
+
+**Possible reasons the fix didn't work:**
+1. The +26pp NO-side calibration gap may not be a sigma magnitude problem.
+   It could be a regime-specific effect (chop) or a structural BS
+   limitation that no vol blend addresses.
+2. Sample of 52 is still smaller than ideal; true effect could be neutral
+   with bad luck on top. But ~1% probability under the null is hard to
+   wave away.
+3. The market regime changed concurrent with the ship — overnight chop
+   would have hurt any model. Hard to disentangle from the change itself.
+
+**Action:** revert the running bot to `main` (pre-c2c), keep
+`experiment/c2c-blend` branch intact as a documented failed experiment,
+reassess the NO-side leak from a different angle (not just sigma magnitude).
+
+**Reverted at:** 2026-04-30 15:05 UTC (marker in journal)
+
+---
+
 ## [2026-04-29] — merged `experiment/parkinson-sigma` → main
 
 **Validation summary (69 post-drift trades):**
