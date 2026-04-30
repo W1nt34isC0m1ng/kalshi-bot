@@ -180,6 +180,38 @@ def compute_d2(
     return abs(math.log(spot / strike) + drift_term) / max(sigma_t, 1e-9)
 
 
+def fetch_efficiency_ratio(product: str, lookback_minutes: int = 20) -> float | None:
+    """Kaufman's Efficiency Ratio — net move / total path length over a window.
+
+    ER ≈ 1.0 → pure trend (every minute moved in the same direction)
+    ER ≈ 0.0 → pure chop (every minute reversed the prior one)
+    Typical mid-vol crypto regime → 0.3–0.6
+
+    A regime indicator. Low ER means realized vol over the option lifetime is
+    much higher than the lookback's net move suggests — exactly when 15-min
+    binaries are dominated by reversal noise rather than directional movement.
+    Used as a "stand down in chop" gate: trends and ranges are both tradeable;
+    chop generally isn't.
+
+    Reuses the candle cache from `fetch_rolling_vol`. Returns None if the
+    cache is cold or the path length is degenerate (zero net movement).
+    """
+    cached = _candles_cache.get(product)
+    if not cached:
+        return None
+    candles, _ = cached
+    if len(candles) < lookback_minutes + 1:
+        return None
+    closes = [float(c[4]) for c in candles[-(lookback_minutes + 1):]]
+    if len(closes) < 2:
+        return None
+    net = abs(closes[-1] - closes[0])
+    path = sum(abs(closes[i] - closes[i - 1]) for i in range(1, len(closes)))
+    if path < 1e-9:
+        return None
+    return net / path
+
+
 def fetch_recent_log_drift(product: str, lookback_minutes: int = 20) -> float:
     """Estimate per-minute log-return drift from recent candles.
 

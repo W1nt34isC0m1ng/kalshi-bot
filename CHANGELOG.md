@@ -9,9 +9,40 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased]
+## [Unreleased] — branch `experiment/chop-guard`
 
-(no in-progress changes)
+### Added
+- **Kaufman Efficiency Ratio (`fetch_efficiency_ratio`).** Net price move /
+  total path length over a 20-min window. ER ≈ 1 = trend, ER ≈ 0 = chop.
+  Reuses the candle cache from `fetch_rolling_vol`, no extra API call.
+- **Chop-guard gate** on `CryptoProbStrategy.evaluate()`. Rejects signals
+  when ER < `min_efficiency_ratio` (default 0.30).
+- `er=` field in journal `reason` for post-hoc analysis.
+
+### Backtest evidence
+397 historical settled trades, ER computed at each signal time:
+
+| ER bucket | n | WR | pnl/trade |
+|---|---|---|---|
+| <0.20 (extreme chop) | 233 (59%) | 30% | −14¢ |
+| 0.20–0.30 (chop) | 73 (18%) | 26% | −26¢ |
+| 0.30–0.40 (mild chop) | 49 (12%) | 41% | +22¢ |
+| 0.40+ (mid/trend) | 40 (10%) | 38% | +1¢ |
+
+77% of historical trades fired in chop regimes (ER < 0.30) where the bot
+systematically lost ~−18¢/trade. Above ER 0.30, +9¢/trade across 89 trades.
+
+Threshold sweep at 0.30 maximizes pnl: keep 89 trades (+$8.88) and block
+306 (−$51.34 avoided). Net swing of ~$60+ across journal history vs
+running ungated. Live test at commit time: ER = 0.13, gate would block.
+
+### Validation plan
+- ≥30 post-marker trades.
+- Cumulative WR ≥ 42% (we know pre-fix on main has been struggling ~30%).
+- Volume should drop ~70%+ vs pre-gate baseline (this is feature, not bug).
+- If ER backtest holds out-of-sample, this branch graduates to main.
+
+---
 
 ---
 
