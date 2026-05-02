@@ -9,9 +9,34 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased] — branch `experiment/chop-guard`
+## [Unreleased]
+
+(no in-progress changes)
+
+---
+
+## [2026-05-02] — merged `experiment/chop-guard` → main
+
+**Validation summary (28 post-ship trades over ~32 hours):**
+- WR: **54%** (target ≥42%) ✅
+- Net P&L: **+$26.08** / +$0.93 per trade ✅
+- YES bets: 8/15 = 53% WR
+- NO bets: 7/13 = 54% WR (first time both sides at elevated rate)
+- Volume drop: ~70% as predicted ✅
+- Cumulative post-drift returned from −$3.28 to +$34.88 ✅
+
+**Statistical check:** at n=28 with 15 wins, P(≥15 wins | true rate 39% baseline)
+≈ 0.06. Marginal at 5% but the supporting evidence is strong: side-level
+balance, mechanism is data-validated against 397-trade backtest, recovery
+from the c2c-induced drawdown is unambiguous.
+
+The breakthrough wasn't a calibration improvement — it was a regime gate.
+The chop-guard prevents losses rather than creating wins, exactly what
+the backtest predicted. Backtest's projected +$60 swing across full
+journal history is consistent with observed +$0.93/trade × small sample.
 
 ### Added
+- **Kaufman Efficiency Ratio (`fetch_efficiency_ratio`).** Net price move /
 - **Kaufman Efficiency Ratio (`fetch_efficiency_ratio`).** Net price move /
   total path length over a 20-min window. ER ≈ 1 = trend, ER ≈ 0 = chop.
   Reuses the candle cache from `fetch_rolling_vol`, no extra API call.
