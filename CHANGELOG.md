@@ -15,6 +15,52 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
+## [2026-05-03] — `experiment/chop-guard` reverted from main
+
+**Result:** the chop-guard merge was premature. Validation at n=28 / 54%
+WR was lucky variance, not signal. Three days of post-merge data:
+
+| Window | n | WR | $/trade |
+|---|---|---|---|
+| Validation window (celebrated) | 28 | 54% | +$0.93 |
+| Days 2–3 (real picture) | 54 | 13% | −$1.55 |
+| Cumulative post-chop-guard | 82 | 27% | −$0.69 |
+
+For comparison, pre-merge baseline (post-Parkinson + drift) was +$0.49/trade
+over 80 trades. The chop-guard merge made things materially worse, not
+better.
+
+**Diagnostic — what we learned:**
+The chop-guard didn't randomly perform poorly; it interacted badly with
+the existing sigma logic. Stratifying post-chop-guard outcomes by sigma:
+
+| sigma | n | WR | $/trade |
+|---|---|---|---|
+| ≤0.20 (at floor) | 57 | 21% | −$0.96 |
+| >0.20 | 16 | 50% | +$0.46 |
+
+The ER gate filtered the population in a way that selected for losing
+floored-sigma trades. **Pre-chop-guard, σ 0.10–0.20 was profitable
+(+$0.16/trade across 95 trades). Post-chop-guard the same sigma range
+was −$0.96/trade.** The gate didn't *create* the floored-sigma issue —
+it filtered out the trades that were masking it.
+
+**Lesson:** validation thresholds were too low. We celebrated 28 trades.
+Should have held for 100+. The pattern that looked statistically marginal
+(p≈0.06) at n=28 reversed completely as the sample grew.
+
+**Action:** `git revert -m 1` of the chop-guard merge. Branch
+`experiment/chop-guard` preserved on remote — the data lives in CHANGELOG
+and journal markers; the code is in git history. We may revisit the
+chop-guard concept in combination with a sigma-floor gate, but not now.
+
+The underlying floored-sigma leak is real (visible in both pre- and post-
+chop-guard data, just expressed differently). That's the next thing to
+investigate, after we've stabilized on a known-good baseline (post-
+Parkinson + drift).
+
+---
+
 ## [2026-04-30] — `experiment/c2c-blend` invalidated, not merged
 
 **Hypothesis:** Parkinson HLOC understates vol on directional 1-min candles
