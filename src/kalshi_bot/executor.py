@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
+from pathlib import Path
 
 from .client import KalshiHttpClient
 from .config import Settings
@@ -16,8 +18,47 @@ class ExecutionEngine:
         self.settings = settings
         self.risk = risk
 
-        # cooldown tracking: {(ticker, side): last_sent_ts}
+        # Cooldown state is persisted so restarts don't reset it.
+        self._cooldown_path = Path(settings.risk_state_path).parent / "cooldown_state.json"
+        # {(ticker, side): last_sent_wall_clock_ts}
         self._last_sent: dict[tuple[str, str], float] = {}
+        self._load_cooldowns()
+
+    # ------------------------------------------------------------------ #
+    # Cooldown persistence                                                 #
+    # ------------------------------------------------------------------ #
+
+    def _load_cooldowns(self) -> None:
+        """Load persisted cooldowns, discarding any that have already expired."""
+        if not self._cooldown_path.exists():
+            return
+        try:
+            data = json.loads(self._cooldown_path.read_text())
+            now = time.time()
+            for key_str, ts in data.items():
+                parts = key_str.split("|", 1)
+                if len(parts) != 2:
+                    continue
+                key = (parts[0], parts[1])
+                # Only restore if the cooldown window could still be active.
+                if now - float(ts) < self.settings.cooldown_seconds:
+                    self._last_sent[key] = float(ts)
+            logging.debug(
+                "executor: loaded %d active cooldowns from %s",
+                len(self._last_sent),
+                self._cooldown_path,
+            )
+        except Exception as exc:
+            logging.warning("executor: could not load cooldown state: %s", exc)
+
+    def _save_cooldowns(self) -> None:
+        """Persist current cooldown state to disk."""
+        try:
+            self._cooldown_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {f"{k[0]}|{k[1]}": v for k, v in self._last_sent.items()}
+            self._cooldown_path.write_text(json.dumps(data, indent=2))
+        except Exception as exc:
+            logging.warning("executor: could not save cooldown state: %s", exc)
 
     def _maker_yes_price(self, signal: Signal) -> int:
         """Convert a signal into a maker-safe YES-equivalent price.
@@ -88,6 +129,7 @@ class ExecutionEngine:
 
     def _mark_sent(self, signal: Signal) -> None:
         self._last_sent[self._cooldown_key(signal)] = time.time()
+        self._save_cooldowns()
 
     def maybe_send(self, signal: Signal) -> dict:
         cooldown_active, remaining = self._cooldown_active(signal)

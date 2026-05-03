@@ -13,14 +13,14 @@ from .coinbase import (
     ASSET_CONFIG,
     asset_prefix_from_ticker,
     compute_d2,
-    compute_implied_vol,
     fetch_5m_momentum,
-    fetch_rolling_vol,
+    fetch_recent_log_drift,
     fetch_spot,
     fetch_spot_at_open,
     fetch_trend_strength,
     get_average_vol_5d,
     prob_above_strike,
+    resolve_sigma,
 )
 from .models import Market, Signal
 
@@ -43,33 +43,23 @@ class MeanReversionStrategy:
     vol_regime_low_mult: float = 0.8
     max_trend_strength: float = 1.5  # block MR when directional move exceeds 1.5σ
     max_d2: float = 1.2              # same overconfidence guard as CryptoProbStrategy
+    # Damped drift term — mean reversion explicitly models overshoot so we
+    # incorporate the same 20-min realized drift used by CryptoProbStrategy,
+    # attenuated by 0.10 (slightly lower than CryptoProbStrategy's 0.15 since MR
+    # already filters out strongly-trending markets via the trend guard).
+    drift_persistence: float = 0.10
 
     def _resolve_sigma(
         self,
+        product: str,
         market_price: float,
         spot: float,
         strike: float,
         secs_left: float,
         vol_mult: float,
     ) -> float:
-        """max(realized, implied) sigma — same logic as CryptoProbStrategy."""
-        hist_sigma = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
-        if hist_sigma is None:
-            hist_sigma = 0.80 * vol_mult
-
-        market_frac = market_price / 100.0
-        implied = compute_implied_vol(market_frac, spot, strike, secs_left)
-
-        if implied is not None:
-            sigma = max(hist_sigma, implied)
-            logging.debug(
-                "mean_reversion: sigma hist=%.2f implied=%.2f → using %.2f",
-                hist_sigma, implied, sigma,
-            )
-        else:
-            sigma = hist_sigma
-
-        return sigma
+        """Delegate to the shared coinbase.resolve_sigma utility."""
+        return resolve_sigma(product, market_price, spot, strike, secs_left, vol_mult)
 
     def _anti_momentum_boost(self, product: str, spot_now: float, side: str) -> float:
         """Boost confidence when 5-minute momentum opposes trade direction.
@@ -158,7 +148,15 @@ class MeanReversionStrategy:
         # ---- volatility ------------------------------------------- #
         # Uses max(realized, implied) so sigma is never lower than what the
         # Kalshi market itself is pricing in.
-        sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
+        sigma = self._resolve_sigma(product, market_price, spot_now, strike_price, secs_left, vol_mult)
+
+        # ---- drift ------------------------------------------------- #
+        # Mean reversion explicitly models overshoot, so we incorporate the
+        # same realized log-drift used by CryptoProbStrategy (attenuated by
+        # drift_persistence, slightly lower here because the trend guard
+        # already filters the strongly-trending regime where drift matters most).
+        raw_drift = fetch_recent_log_drift(product, lookback_minutes=20)
+        mu_per_min = raw_drift * self.drift_persistence
 
         # ---- trend filter ----------------------------------------- #
         # Mean reversion is the wrong tool in a trending market. Measure how
@@ -173,7 +171,7 @@ class MeanReversionStrategy:
             return None
 
         # ---- moneyness -------------------------------------------- #
-        d2 = compute_d2(spot_now, strike_price, secs_left, sigma)
+        d2 = compute_d2(spot_now, strike_price, secs_left, sigma, mu_per_minute=mu_per_min)
 
         # Cap d2: same overconfidence guard as CryptoProbStrategy.
         # High d2 means the model thinks outcome is "certain" — but only if sigma
@@ -196,6 +194,7 @@ class MeanReversionStrategy:
             strike_price=strike_price,
             secs_left=secs_left,
             annualized_vol=sigma,
+            mu_per_minute=mu_per_min,
         )
         fair_cents = fair_prob * 100.0
         raw_edge = fair_cents - market_price
@@ -242,9 +241,11 @@ class MeanReversionStrategy:
 
         logging.info(
             "mean_reversion: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
-            "raw_edge=%.1f d2=%.2f conf=%.2f vol_boost=%.2f anti_mom=%.2f trend=%.2f score=%.2f size=%d sigma=%.2f",
+            "raw_edge=%.1f d2=%.2f conf=%.2f vol_boost=%.2f anti_mom=%.2f trend=%.2f "
+            "score=%.2f size=%d sigma=%.2f drift=%.5f",
             market.ticker, side, spot_now, strike_price, market_price, fair_cents,
-            raw_edge, d2, confidence, vol_boost, anti_momentum, trend_strength, adjusted_edge, position_size, sigma,
+            raw_edge, d2, confidence, vol_boost, anti_momentum, trend_strength,
+            adjusted_edge, position_size, sigma, mu_per_min,
         )
 
         return Signal(
@@ -261,7 +262,8 @@ class MeanReversionStrategy:
                 f"mean_rev: spot={spot_now:.2f}, strike={strike_price:.2f}, "
                 f"d2={d2:.2f}, conf={confidence:.2f}, vol={sigma:.2f}, "
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, "
-                f"ev={ev_cents:.1f}, ev_roi={ev_roi:.4f}, trend={trend_strength:.2f}, size={position_size}"
+                f"ev={ev_cents:.1f}, ev_roi={ev_roi:.4f}, trend={trend_strength:.2f}, "
+                f"drift={mu_per_min:.5f}, size={position_size}"
             ),
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,

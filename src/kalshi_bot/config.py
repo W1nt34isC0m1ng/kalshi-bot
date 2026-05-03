@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -48,6 +49,10 @@ class Settings:
     )
     trade_journal_path: str = os.getenv("TRADE_JOURNAL_PATH", "logs/trade_journal.csv")
     risk_state_path: str = os.getenv("RISK_STATE_PATH", "logs/risk_state.json")
+    outcomes_path: str = os.getenv("OUTCOMES_PATH", "logs/outcomes.csv")
+    heartbeat_path: str = os.getenv("HEARTBEAT_PATH", "logs/heartbeat.txt")
+    # How often (seconds) the main loop auto-settles expired positions.
+    settle_interval_seconds: int = int(os.getenv("SETTLE_INTERVAL_SECONDS", "60"))
     # Strategy tuning
     enable_signal_filters: bool = (
         os.getenv("ENABLE_SIGNAL_FILTERS", "true").lower() == "true"
@@ -63,6 +68,7 @@ class Settings:
     trading_start_minute_local: int = int(os.getenv("TRADING_START_MINUTE_LOCAL", "0"))
     trading_end_hour_local: int = int(os.getenv("TRADING_END_HOUR_LOCAL", "23"))
     trading_end_minute_local: int = int(os.getenv("TRADING_END_MINUTE_LOCAL", "58"))
+
     def __post_init__(self) -> None:
         if self.category_filter is None:
             self.category_filter = _csv("CATEGORY_FILTER", "Crypto")
@@ -72,6 +78,17 @@ class Settings:
                 "KALSHI_API_KEY_ID or KALSHI_PRIVATE_KEY_PATH not set — "
                 "running without authenticated client (dry_run only)"
             )
+        elif self.private_key_path:
+            key_file = Path(self.private_key_path)
+            if not key_file.exists():
+                raise FileNotFoundError(
+                    f"Private key file not found: {self.private_key_path!r}. "
+                    "Set KALSHI_PRIVATE_KEY_PATH to an existing PEM file."
+                )
+            if not key_file.is_file():
+                raise ValueError(
+                    f"KALSHI_PRIVATE_KEY_PATH={self.private_key_path!r} is not a file."
+                )
 
         if self.live_side_mode not in {"both", "yes_only"}:
             logging.warning(

@@ -9,14 +9,13 @@ from .coinbase import (
     ASSET_CONFIG,
     asset_prefix_from_ticker,
     compute_d2,
-    compute_implied_vol,
     fetch_5m_momentum,
     fetch_recent_log_drift,
-    fetch_rolling_vol,
     fetch_spot,
     fetch_spot_at_open,
     fetch_trend_strength,
     prob_above_strike,
+    resolve_sigma,
 )
 from .models import Market, Signal
 
@@ -54,42 +53,15 @@ class CryptoProbStrategy:
 
     def _resolve_sigma(
         self,
+        product: str,
         market_price: float,
         spot: float,
         strike: float,
         secs_left: float,
         vol_mult: float,
     ) -> float:
-        """Best available sigma estimate.
-
-        Priority:
-          1. Market-implied vol from Kalshi mid-price  — the market itself
-             is pricing how uncertain the outcome is. Use it when available.
-          2. Rolling 20-min realized vol from Coinbase candles.
-          3. Hard fallback.
-
-        We take max(implied, historical) so we never use a sigma the market
-        is already telling us is too low.
-        """
-        # Historical realized vol (also warms the candle cache)
-        hist_sigma = fetch_rolling_vol("BTC-USD", vol_mult=vol_mult, lookback_minutes=20)
-        if hist_sigma is None:
-            hist_sigma = 0.80 * vol_mult
-
-        # Market-implied vol — back out sigma from the Kalshi mid-price
-        market_frac = market_price / 100.0
-        implied = compute_implied_vol(market_frac, spot, strike, secs_left)
-
-        if implied is not None:
-            sigma = max(hist_sigma, implied)
-            logging.debug(
-                "strategy: sigma hist=%.2f implied=%.2f → using %.2f",
-                hist_sigma, implied, sigma,
-            )
-        else:
-            sigma = hist_sigma
-
-        return sigma
+        """Delegate to the shared coinbase.resolve_sigma utility."""
+        return resolve_sigma(product, market_price, spot, strike, secs_left, vol_mult)
 
     def _momentum_boost(self, spot_now: float, product: str, side: str) -> float:
         """Confidence boost when 5-minute momentum aligns with trade direction."""
@@ -160,7 +132,7 @@ class CryptoProbStrategy:
         # ---- volatility ------------------------------------------- #
         # Uses max(realized, implied) so sigma is never lower than what the
         # Kalshi market itself is pricing in.
-        sigma = self._resolve_sigma(market_price, spot_now, strike_price, secs_left, vol_mult)
+        sigma = self._resolve_sigma(product, market_price, spot_now, strike_price, secs_left, vol_mult)
 
         # ---- drift ------------------------------------------------- #
         # Calibration analysis on 46 post-Parkinson trades found the model

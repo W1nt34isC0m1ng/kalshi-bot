@@ -7,9 +7,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable
 
-from backtest import asset_prefix_from_ticker, parse_market_ticker
+from src.kalshi_bot.coinbase import asset_prefix_from_ticker
 from src.kalshi_bot.config import Settings
 from src.kalshi_bot.main import build_clients
+from src.kalshi_bot.tickers import parse_market_ticker
 
 ZERO = Decimal("0")
 ONE = Decimal("1")
@@ -100,7 +101,10 @@ def _filled_orders_from_api(orders: Iterable[dict], *, series_prefix: str | None
         if fill_count <= 0:
             continue
 
-        _, expiry_time, _ = parse_market_ticker(ticker)
+        parsed = parse_market_ticker(ticker)
+        if parsed is None:
+            continue
+        _, expiry_time, _ = parsed
         fill_cost_dollars = _decimal(order.get("maker_fill_cost_dollars")) + _decimal(
             order.get("taker_fill_cost_dollars")
         )

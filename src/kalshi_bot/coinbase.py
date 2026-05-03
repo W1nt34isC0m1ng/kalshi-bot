@@ -180,7 +180,44 @@ def compute_d2(
     return abs(math.log(spot / strike) + drift_term) / max(sigma_t, 1e-9)
 
 
-def fetch_recent_log_drift(product: str, lookback_minutes: int = 20) -> float:
+def resolve_sigma(
+    product: str,
+    market_price: float,
+    spot: float,
+    strike: float,
+    secs_left: float,
+    vol_mult: float,
+) -> float:
+    """Best available sigma estimate: ``max(realized, implied)``.
+
+    Priority:
+      1. Market-implied vol from the Kalshi mid-price — the market itself is
+         pricing how uncertain the outcome is.  Use it when available.
+      2. Rolling 20-min realized Parkinson vol from Coinbase candles.
+      3. Hard fallback based on ``vol_mult``.
+
+    Taking ``max(implied, historical)`` means we never use a sigma the market
+    is already telling us is too low.  Both ``CryptoProbStrategy`` and
+    ``MeanReversionStrategy`` share this calculation so there is exactly one
+    implementation to tune.
+    """
+    hist_sigma = fetch_rolling_vol(product, vol_mult=vol_mult, lookback_minutes=20)
+    if hist_sigma is None:
+        hist_sigma = 0.80 * vol_mult
+
+    market_frac = market_price / 100.0
+    implied = compute_implied_vol(market_frac, spot, strike, secs_left)
+
+    if implied is not None:
+        sigma = max(hist_sigma, implied)
+        logging.debug(
+            "coinbase: resolve_sigma %s hist=%.2f implied=%.2f → using %.2f",
+            product, hist_sigma, implied, sigma,
+        )
+    else:
+        sigma = hist_sigma
+
+    return sigma
     """Estimate per-minute log-return drift from recent candles.
 
     Uses the same candle cache populated by `fetch_rolling_vol`, so no extra

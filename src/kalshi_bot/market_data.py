@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Iterable
@@ -11,11 +12,20 @@ from .models import Market
 _TARGET_RE = re.compile(r'\$([\d,]+\.?\d*)\s*target', re.IGNORECASE)
 
 
+# Series to scan.  ETH is now included but guarded by a minimum open-interest
+# threshold — if a market has no open interest it almost certainly has a dead
+# book and no fills are possible.
 CRYPTO_15M_SERIES = [
     "KXBTC15M",
-    # KXETH15M excluded: markets are frequently illiquid (bid=0/ask=0) and
-    # insufficient trade history to validate the vol_mult calibration.
+    "KXETH15M",
 ]
+
+# Minimum open interest (number of contracts) required to consider a market
+# tradeable.  BTC markets are generally liquid; ETH needs a stricter gate.
+_MIN_OPEN_INTEREST: dict[str, float] = {
+    "KXBTC15M": 0.0,
+    "KXETH15M": 50.0,
+}
 
 
 class MarketDataService:
@@ -58,15 +68,15 @@ class MarketDataService:
                 with_nested_markets=False,
             )
         except Exception as e:
-            print(f"[market_data] {series} events_fetch_error={e}")
+            logging.warning("market_data: %s events_fetch_error=%s", series, e)
             return None
 
         rows = page.get("events", []) or page.get("data", []) or []
 
         if rows:
-            print(f"[market_data] {series} first_event_row={rows[0]}")
+            logging.debug("market_data: %s first_event_row=%s", series, rows[0])
 
-        print(f"[market_data] {series} events_fetched={len(rows)}")
+        logging.debug("market_data: %s events_fetched=%d", series, len(rows))
 
         candidates: list[tuple[float, str]] = []
 
@@ -86,7 +96,7 @@ class MarketDataService:
             candidates.append((secs_left, event_ticker))
 
         if not candidates:
-            print(f"[market_data] {series} no live events")
+            logging.debug("market_data: %s no live events", series)
             return None
 
         candidates.sort(key=lambda x: x[0])
@@ -105,11 +115,18 @@ class MarketDataService:
                         kalshi_target = float(m.group(1).replace(",", ""))
                     except ValueError:
                         pass
+                else:
+                    logging.warning(
+                        "market_data: strike regex did not match title=%r for event %s "
+                        "(will fall back to Coinbase open-spot estimate)",
+                        title,
+                        event_ticker,
+                    )
                 break
 
-        print(
-            f"[market_data] {series} nearest_event={event_ticker} "
-            f"secs_left={secs_left:.0f} kalshi_target={kalshi_target}"
+        logging.debug(
+            "market_data: %s nearest_event=%s secs_left=%.0f kalshi_target=%s",
+            series, event_ticker, secs_left, kalshi_target,
         )
         return event_ticker, secs_left, kalshi_target
 
@@ -123,6 +140,7 @@ class MarketDataService:
                 continue
 
             kept_for_series = 0
+            min_oi = _MIN_OPEN_INTEREST.get(series, 0.0)
 
             event_ticker, event_secs_left, kalshi_target = picked
 
@@ -134,11 +152,11 @@ class MarketDataService:
                     mve_filter="exclude",
                 )
             except Exception as e:
-                print(f"[market_data] {series} markets_fetch_error={e}")
+                logging.warning("market_data: %s markets_fetch_error=%s", series, e)
                 continue
 
             rows = page.get("markets", [])
-            print(f"[market_data] {series} event_markets_fetched={len(rows)}")
+            logging.debug("market_data: %s event_markets_fetched=%d", series, len(rows))
 
             for row in rows:
                 market = Market.from_api(row)
@@ -146,33 +164,41 @@ class MarketDataService:
                 market.secs_left = event_secs_left
                 market.kalshi_strike = kalshi_target
 
-                print(
-                    f"[market_data] {series} {market.ticker} "
-                    f"bid={market.yes_bid} ask={market.yes_ask} "
-                    f"last={market.last_price} oi={market.open_interest} "
-                    f"secs_left={event_secs_left:.0f}"
+                logging.debug(
+                    "market_data: %s %s bid=%s ask=%s last=%s oi=%s secs_left=%.0f",
+                    series, market.ticker,
+                    market.yes_bid, market.yes_ask, market.last_price,
+                    market.open_interest, event_secs_left,
                 )
+
+                if market.open_interest < min_oi:
+                    skipped += 1
+                    logging.debug(
+                        "market_data: SKIP %s open_interest=%.0f < min_oi=%.0f",
+                        market.ticker, market.open_interest, min_oi,
+                    )
+                    continue
 
                 if market.yes_bid <= 0 and market.yes_ask <= 0 and market.last_price <= 0:
                     skipped += 1
-                    print(
-                        f"[market_data] {series} {market.ticker} has empty REST quotes; "
-                        "yielding anyway for WS bootstrap"
+                    logging.debug(
+                        "market_data: %s %s has empty REST quotes; "
+                        "yielding anyway for WS bootstrap",
+                        series, market.ticker,
                     )
 
                 kept += 1
                 kept_for_series += 1
-                print(
-                    f"[market_data] KEPT {market.ticker} "
-                    f"bid={market.yes_bid} ask={market.yes_ask} "
-                    f"last={market.last_price} oi={market.open_interest} "
-                    f"secs_left={market.secs_left:.0f}"
+                logging.debug(
+                    "market_data: KEPT %s bid=%s ask=%s last=%s oi=%s secs_left=%.0f",
+                    market.ticker, market.yes_bid, market.yes_ask,
+                    market.last_price, market.open_interest, market.secs_left,
                 )
                 yield market
                 if kept_for_series >= self.markets_per_event:
                     break
 
-        print(f"[market_data] done kept={kept} skipped={skipped}")
+        logging.debug("market_data: done kept=%d skipped=%d", kept, skipped)
 
     def get_top_of_book(self, ticker: str) -> dict:
         return self.client.get_orderbook(ticker)

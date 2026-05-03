@@ -5,6 +5,7 @@ import signal
 import threading
 import time
 from datetime import datetime, time as dt_time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from rich.console import Console
@@ -20,6 +21,7 @@ from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
+from .settle import settle
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -261,15 +263,18 @@ def _start_websocket(
                 )
 
     def run():
+        backoff = 5.0
         while not shutdown_event.is_set():
             try:
                 ws = KalshiWebSocket(settings.ws_url, signer, on_message)
                 ws.run(tickers_to_subscribe)
+                backoff = 5.0  # reset on clean exit
             except Exception as exc:
                 if shutdown_event.is_set():
                     break
-                logging.warning("ws: disconnected (%s), reconnecting in 5s", exc)
-                time.sleep(5)
+                logging.warning("ws: disconnected (%s), reconnecting in %.0fs", exc, backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 60.0)
 
     threading.Thread(target=run, daemon=True, name="ws-consumer").start()
 
@@ -315,7 +320,7 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    # mean_reversion = MeanReversionStrategy()  # disabled: focusing on crypto_prob
+    mean_reversion = MeanReversionStrategy()
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:
@@ -324,6 +329,7 @@ def main() -> None:
     ws_market_cache: dict[str, dict] = {}
     active_tickers: list[str] = []
     last_position_reconcile = time.monotonic()
+    last_settle_time = time.monotonic()
 
     shutdown_event = threading.Event()
 
@@ -367,7 +373,7 @@ def main() -> None:
         for market in markets:
             market = _apply_ws_cache(market, ws_market_cache)
 
-            for strat in (strategy,):  # mean_reversion disabled — crypto_prob only
+            for strat in (strategy, mean_reversion):
                 sig = strat.evaluate(market)
                 if sig and _passes_signal_filters(sig, settings):
                     # Deduplicate: one signal per (ticker, side, strategy)
@@ -420,6 +426,22 @@ def main() -> None:
                 premium_cents_per_contract=str(premium_cents),
                 notional_cents=str(notional_cents),
             )
+
+        # ---- auto-settle ------------------------------------------ #
+        if (time.monotonic() - last_settle_time) >= settings.settle_interval_seconds:
+            try:
+                settle(Path(settings.trade_journal_path), Path(settings.outcomes_path))
+            except Exception as exc:
+                logging.warning("main: auto-settle failed: %s", exc)
+            last_settle_time = time.monotonic()
+
+        # ---- heartbeat -------------------------------------------- #
+        try:
+            heartbeat_path = Path(settings.heartbeat_path)
+            heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+            heartbeat_path.write_text(datetime.now().isoformat())
+        except Exception as exc:
+            logging.debug("main: heartbeat write failed: %s", exc)
 
         time.sleep(settings.poll_interval_seconds)
 
