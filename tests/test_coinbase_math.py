@@ -109,7 +109,7 @@ class TestComputeD2:
         assert d2 > 0
 
     def test_positive_when_below_strike(self):
-        """compute_d2 always returns abs value."""
+        """compute_d2 returns abs(log-moneyness / sigma_t) — always non-negative."""
         d2 = compute_d2(95.0, 100.0, 900.0, 0.80)
         assert d2 > 0
 

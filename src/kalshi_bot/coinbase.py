@@ -218,6 +218,9 @@ def resolve_sigma(
         sigma = hist_sigma
 
     return sigma
+
+
+def fetch_recent_log_drift(product: str, lookback_minutes: int = 20) -> float:
     """Estimate per-minute log-return drift from recent candles.
 
     Uses the same candle cache populated by `fetch_rolling_vol`, so no extra
