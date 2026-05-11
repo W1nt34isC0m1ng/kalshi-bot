@@ -51,6 +51,13 @@ class CryptoProbStrategy:
     # most of April 22's losses. fetch_trend_strength returns a signed value:
     # positive = uptrend, negative = downtrend.
     max_trend_strength: float = 1.0
+    # Fade mode — invert the side selection at trade time. Strategy internals
+    # (signal generation, gates, scoring, score gate) all run on the bot's
+    # ORIGINAL side selection. Only the final `side` returned is flipped.
+    # Hypothesis under test: the bot is anti-predictive (37% WR over 328
+    # post-revert trades). Fading the same selections theoretically yields
+    # 63% WR / +$39 / +12c per trade before execution costs.
+    fade_mode: bool = False
 
     def _resolve_sigma(
         self,
@@ -246,10 +253,22 @@ class CryptoProbStrategy:
             logging.debug("strategy: REJECT %s score too low: %.2f", market.ticker, adjusted_edge)
             return None
 
+        # ---- fade mode --------------------------------------------- #
+        # All preceding logic — gate filters, side selection from raw_edge,
+        # score gate — runs on the bot's ORIGINAL side. If fade_mode is on,
+        # we flip at this point: same trades fire, opposite side. Everything
+        # downstream (premium, notional, executor intent) uses the flipped
+        # side correctly because the Signal carries it.
+        original_side = side
+        if self.fade_mode:
+            side = "no" if original_side == "yes" else "yes"
+
         logging.info(
-            "strategy: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
+            "strategy: KEEP %s side=%s%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
             "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f trend=%.2f drift=%.5f",
-            market.ticker, side, spot_now, strike_price, market_price, fair_cents,
+            market.ticker, side,
+            f" (faded from {original_side})" if self.fade_mode else "",
+            spot_now, strike_price, market_price, fair_cents,
             raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left, trend, mu_per_min,
         )
 
@@ -269,7 +288,8 @@ class CryptoProbStrategy:
                 f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
                 f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
                 f"momentum_boost={momentum_boost:.2f}, trend={trend:.2f}, "
-                f"drift={mu_per_min:.5f}"
+                f"drift={mu_per_min:.5f}, orig_side={original_side}, "
+                f"fade={'on' if self.fade_mode else 'off'}"
             ),
             momentum_boost=momentum_boost,
             yes_bid=market.yes_bid,

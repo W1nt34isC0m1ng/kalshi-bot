@@ -55,6 +55,12 @@ class Settings:
     crypto_min_edge_cents: int = int(os.getenv("CRYPTO_MIN_EDGE_CENTS", "6"))
     crypto_max_spread_cents: int = int(os.getenv("CRYPTO_MAX_SPREAD_CENTS", "10"))
     crypto_min_score: float = float(os.getenv("CRYPTO_MIN_SCORE", "6.0"))
+    # Fade mode: invert the bot's chosen side at trade-time. Strategy logic
+    # (signal generation, gates, scoring) runs unchanged; only the final
+    # `side` is flipped. Tests the hypothesis that the bot is anti-predictive
+    # — fading historical 328-trade cohort yields theoretical +$39 / +12c/trade
+    # before execution costs.
+    fade_mode: bool = os.getenv("FADE_MODE", "false").lower() == "true"
     momentum_scaling_factor: float = float(os.getenv("MOMENTUM_SCALING_FACTOR", "0.15"))
     min_momentum_boost: float = float(os.getenv("MIN_MOMENTUM_BOOST", "0.01"))
     live_side_mode: str = os.getenv("LIVE_SIDE_MODE", "both").lower()

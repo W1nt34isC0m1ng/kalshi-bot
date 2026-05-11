@@ -9,9 +9,44 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased]
+## [Unreleased] — branch `experiment/fade-mode`
 
-(no in-progress changes)
+### Added
+- **`FADE_MODE` env flag (default `false`)** plumbed through `Settings` into
+  `CryptoProbStrategy.fade_mode`. When enabled, the strategy runs all of its
+  signal generation, gates, scoring, and score-gate logic unchanged on the
+  bot's ORIGINAL side selection — then flips `side` at the very end before
+  returning the Signal. Same trades fire; opposite side gets taken.
+- `orig_side=` and `fade=on|off` logged to journal `reason` for analysis.
+
+### Hypothesis under test
+Post-revert cohort of 328 trades shows **37% WR / −$39.36** for the bot's
+native side selection. Mathematically, fading every trade yields **63% WR
+/ +$39.36** in dry_run (Kalshi binary payoffs are symmetric so pnl flips
+sign exactly). Per-side breakdown:
+
+| Slice | n | Theoretical fade pnl |
+|---|---|---|
+| Fade YES bets (fire NO) | 170 | +$13.76 (+8c/trade) |
+| Fade NO bets (fire YES) | 158 | +$25.60 (+16c/trade) |
+
+The NO-bet fade signal is roughly 2× stronger.
+
+### Validation plan
+- 100+ post-marker trades in dry_run with `FADE_MODE=true`.
+- WR should hold ≥55% (allowing slack vs the theoretical 63% for sample noise).
+- Stratified breakdown by orig_side should preserve the NO-fade > YES-fade
+  asymmetry. If asymmetry inverts or vanishes, the original bot's anti-
+  predictiveness is regime-specific, not stable signal.
+
+### Risks
+- **Mean reversion.** A 37% WR over 328 trades is data, but the "true" rate
+  could be 45-50% with bad luck weighted toward our observation window.
+- **Live execution costs.** Spread crossing at typical 1-3c/contract eats
+  50-100% of the theoretical edge. Forward dry_run isolates the signal from
+  cost — pure validation, not deployment.
+- **Self-defeating prophecy.** If we deploy fade-mode at scale, our own
+  flow becomes part of the market. Unlikely to matter at $200 account size.
 
 ---
 

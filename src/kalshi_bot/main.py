@@ -314,7 +314,10 @@ def main() -> None:
         max_spread_cents=settings.crypto_max_spread_cents,
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
+        fade_mode=settings.fade_mode,
     )
+    if settings.fade_mode:
+        logging.warning("strategy: FADE_MODE enabled — sides will be inverted at trade time")
     # mean_reversion = MeanReversionStrategy()  # disabled: focusing on crypto_prob
     journal = TradeJournal(settings.trade_journal_path)
 
