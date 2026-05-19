@@ -26,7 +26,14 @@ class CryptoProbStrategy:
     client: KalshiHttpClient | None = None
 
     min_edge_cents: int = 6
+    # In native mode the max_edge filter rejects "implausibly large" edges as
+    # likely model errors. In fade mode, model errors ARE the signal — large
+    # disagreements with the market are precisely what we want to bet against.
+    # We keep a much higher ceiling (95) when fading just to block truly broken
+    # data (stale spot, wrong strike). Post-flip premium cap separately blocks
+    # the asymmetric-payoff zones, so removing the tight filter here is safe.
     max_edge_cents: int = 30
+    max_edge_cents_fade: int = 95
     max_spread_cents: int = 10
     min_score: float = 6.0
     momentum_scaling_factor: float = 0.15
@@ -204,10 +211,14 @@ class CryptoProbStrategy:
         fair_cents = fair_prob * 100.0
         raw_edge = fair_cents - market_price
 
-        if abs(raw_edge) > self.max_edge_cents:
+        # Fade mode flips the side at trade time, so the bot's "model error"
+        # becomes the trade thesis. Large edges are signal, not bug, when fading.
+        # Premium cap separately blocks the asymmetric-payoff extremes.
+        edge_ceiling = self.max_edge_cents_fade if self.fade_mode else self.max_edge_cents
+        if abs(raw_edge) > edge_ceiling:
             logging.debug(
-                "strategy: REJECT %s edge implausibly large: %.1f (model error?)",
-                market.ticker, raw_edge,
+                "strategy: REJECT %s edge above ceiling: %.1f > %.0f (fade=%s)",
+                market.ticker, raw_edge, edge_ceiling, self.fade_mode,
             )
             return None
 
