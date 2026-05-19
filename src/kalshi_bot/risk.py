@@ -162,7 +162,19 @@ class RiskManager:
     # ------------------------------------------------------------------ #
 
     def approve(self, intent: OrderIntent) -> tuple[bool, str]:
-        order_notional = intent.count * self._premium_cents(intent.side, intent.price)
+        # Premium-per-contract is checked on the side actually being bought,
+        # not whatever side the strategy started with. Critical for fade mode:
+        # the strategy may flip side after its internal gates, and the post-flip
+        # premium is what we actually pay. Caught after live-deploying a fade
+        # bot that produced YES@98c bets — see 2026-05-19 entry in CHANGELOG.
+        premium_per_contract = self._premium_cents(intent.side, intent.price)
+        if premium_per_contract > self.settings.max_premium_cents_per_contract:
+            return False, (
+                f"premium cap breached: {premium_per_contract}c > "
+                f"max_premium={self.settings.max_premium_cents_per_contract}c"
+            )
+
+        order_notional = intent.count * premium_per_contract
         market_count = self.market_position_counts.get(intent.ticker, 0) + intent.count
         market_total = self.market_notional_cents.get(intent.ticker, 0) + order_notional
         total = self.total_notional_cents + order_notional

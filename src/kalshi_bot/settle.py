@@ -33,7 +33,7 @@ from .tickers import parse_expiry_utc
 
 # Statuses that represent a position with real exposure (paper or live).
 # Anything else (cooldown, blocked, shadow_*, etc.) didn't actually trade.
-SETTLEABLE_STATUSES = {"dry_run", "filled", "accepted"}
+SETTLEABLE_STATUSES = {"dry_run", "filled", "accepted", "sent"}
 
 # Margin after expiry before we'll attempt to settle (gives Coinbase time to
 # publish the closing minute candle).
