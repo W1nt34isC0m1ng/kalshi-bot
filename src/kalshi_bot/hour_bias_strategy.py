@@ -73,16 +73,27 @@ class HourBiasStrategy:
         drift: float,
         trend: float,
     ) -> tuple[str | None, str]:
-        """Apply the rule cascade. Returns (side_or_None, rule_name)."""
-        # Bullish/bearish momentum overrides (strongest measured signals)
+        """Apply the rule cascade. Returns (side_or_None, rule_name).
+
+        ATM filter (40-60c) applies to ALL rules, not just hour-of-day.
+        The historical bullish/bearish cohorts (n=42 and n=43) had avg
+        market_price ≈ 48c — well within ATM. Firing outside this range
+        during a live test produced post-only-cross errors on deep
+        ITM/OTM trades that weren't part of the validated signal. Gate
+        all rules behind ATM up front.
+        """
+        # ATM filter — applies to every rule below. Outside this range
+        # the market is well-calibrated (<5pp gap in journal data) and
+        # there's no exploitable edge for any rule.
+        if not (self.atm_min_yes_price <= market_price <= self.atm_max_yes_price):
+            return None, "non-atm"
+
+        # Bullish/bearish momentum overrides (strongest measured signals,
+        # now guaranteed to be in the ATM zone they were validated on).
         if drift > self.drift_threshold and trend > self.trend_threshold:
             return "no", "bullish-mean-revert"
         if drift < -self.drift_threshold and trend < -self.trend_threshold:
             return "no", "bearish"
-
-        # Hour-of-day rules require ATM market price
-        if not (self.atm_min_yes_price <= market_price <= self.atm_max_yes_price):
-            return None, "non-atm"
 
         if hour_utc in self.no_hours:
             return "no", f"hour-{hour_utc}-NO"
