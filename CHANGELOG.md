@@ -9,7 +9,55 @@ Format: dates are UTC. Sections: Added / Changed / Fixed / Removed.
 
 ---
 
-## [Unreleased] — branch `experiment/fade-mode`
+## [Unreleased] — branch `experiment/strategy-c`
+
+### Added
+- **`HourBiasStrategy` (Strategy C)** — rules-based replacement for
+  `CryptoProbStrategy`. Abandons the BS-mispricing thesis entirely.
+  Trade decisions are pure rules over `(hour_of_day_UTC, drift, trend, market_yes_price)`.
+- `main.py` swapped to use `HourBiasStrategy` on this branch.
+
+### Empirical justification
+Calibration analysis on 1,450 settled trades revealed:
+- The market is well-calibrated on aggregate (gaps <5pp across all market_price buckets).
+- BUT specific feature combinations show large unpriced biases:
+  - **Hour 22 UTC:** market 52% / actual 29% (n=77, gap −23pp)
+  - **Hour 13 UTC:** market 53% / actual 34% (n=96, gap −18pp)
+  - **Hour 0 UTC:** market 57% / actual 38% (n=96, gap −20pp)
+  - **Hour 17 UTC:** market 49% / actual 59% (n=80, gap +10pp)
+  - **Bullish setup (drift+ AND trend+):** market 48% / actual 31% (n=42, gap −17pp)
+
+### Strategy rules (in priority order)
+```
+if drift > +0.00002 AND trend > +0.5:                    bet NO   (bullish mean-revert)
+elif drift < -0.00002 AND trend < -0.5:                  bet NO   (bearish)
+elif yes_price ∈ [40,60] AND hour ∈ {0,11,13,14,18,22}:  bet NO
+elif yes_price ∈ [40,60] AND hour ∈ {3,12,17,19}:        bet YES
+else:                                                     don't trade
+```
+
+### Expected behavior change
+- Volume: 64.5 trades/day → ~24 trades/day (−63%)
+- Side bias: 66% NO / 34% YES (was ~50/50)
+- Historical EV: +15–20¢/contract before costs
+
+### Validation plan
+- Run live for ≥100 post-marker trades.
+- Track WR per rule (bullish-mean-revert vs each hour bucket separately).
+- If overall WR ≥55% and per-rule pattern holds, merge to main.
+- If any rule's WR drops below 50%, narrow that rule or drop it.
+
+### Risks
+- **Feature stability.** Hour-of-day biases reflect 25 days of data; the
+  same hours may not stay biased indefinitely. Reassess monthly.
+- **Overfitting.** Rules were chosen by looking at the historical biases.
+  Out-of-sample they may shrink toward zero. Plan accordingly.
+- **Market efficiency over time.** As Kalshi liquidity grows, biases like
+  hour-22 should arbitrage out. Finite shelf life — likely months not years.
+
+---
+
+## [Released] `experiment/fade-mode` (merged 2026-05-19)
 
 ### Added
 - **`FADE_MODE` env flag (default `false`)** plumbed through `Settings` into

@@ -19,6 +19,7 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
+from .hour_bias_strategy import HourBiasStrategy
 from .mean_reversion_strategy import MeanReversionStrategy
 from .ws import KalshiWebSocket
 
@@ -308,16 +309,14 @@ def main() -> None:
     market_data = MarketDataService(api_client, markets_per_event=settings.markets_per_event)
     risk = RiskManager(settings)
     executor = ExecutionEngine(api_client, settings, risk)
-    strategy = CryptoProbStrategy(
+    # Strategy C — rules-based hour-of-day + bullish-mean-revert bot.
+    # Replaces CryptoProbStrategy on this branch. See hour_bias_strategy.py
+    # for the empirical justification (1450-trade calibration analysis).
+    strategy = HourBiasStrategy(
         api_client,
-        min_edge_cents=settings.crypto_min_edge_cents,
         max_spread_cents=settings.crypto_max_spread_cents,
-        min_score=settings.crypto_min_score,
-        momentum_scaling_factor=settings.momentum_scaling_factor,
-        fade_mode=settings.fade_mode,
     )
-    if settings.fade_mode:
-        logging.warning("strategy: FADE_MODE enabled — sides will be inverted at trade time")
+    logging.warning("strategy: HourBiasStrategy active (Strategy C — rules-based)")
     # mean_reversion = MeanReversionStrategy()  # disabled: focusing on crypto_prob
     journal = TradeJournal(settings.trade_journal_path)
 
