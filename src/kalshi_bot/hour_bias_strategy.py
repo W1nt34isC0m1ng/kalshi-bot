@@ -154,6 +154,12 @@ class HourBiasStrategy:
         drift = fetch_recent_log_drift(product, lookback_minutes=20)
         trend = fetch_trend_strength(product, spot_now, sigma, lookback_minutes=20)
 
+        # ---- strike (logged for the settler, not used by rules) -- #
+        # settle.py extracts `strike=` from reason to compute outcomes.
+        # Strategy doesn't need strike for its decisions, but logging it lets
+        # the existing settler join trades to outcomes without modification.
+        strike_price = market.kalshi_strike if (market.kalshi_strike and market.kalshi_strike > 0) else 0.0
+
         # ---- apply the rule cascade ------------------------------- #
         hour_utc = datetime.now(timezone.utc).hour
         side, rule = self._decide(hour_utc, market_price, drift, trend)
@@ -193,7 +199,8 @@ class HourBiasStrategy:
             reason=(
                 f"asset={prefix}, rule={rule}, hour={hour_utc}, "
                 f"market={market_price:.1f}, drift={drift:.5f}, trend={trend:.2f}, "
-                f"spot={spot_now:.2f}, secs_left={secs_left:.0f}, sigma={sigma:.2f}"
+                f"spot={spot_now:.2f}, strike={strike_price:.2f}, "
+                f"secs_left={secs_left:.0f}, sigma={sigma:.2f}"
             ),
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
