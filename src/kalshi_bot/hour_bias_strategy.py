@@ -82,18 +82,19 @@ class HourBiasStrategy:
         ITM/OTM trades that weren't part of the validated signal. Gate
         all rules behind ATM up front.
         """
-        # ATM filter — applies to every rule below. Outside this range
-        # the market is well-calibrated (<5pp gap in journal data) and
-        # there's no exploitable edge for any rule.
+        # ATM filter — applies to every rule below.
         if not (self.atm_min_yes_price <= market_price <= self.atm_max_yes_price):
             return None, "non-atm"
 
-        # Bullish/bearish momentum overrides (strongest measured signals,
-        # now guaranteed to be in the ATM zone they were validated on).
-        if drift > self.drift_threshold and trend > self.trend_threshold:
-            return "no", "bullish-mean-revert"
-        if drift < -self.drift_threshold and trend < -self.trend_threshold:
-            return "no", "bearish"
+        # MOMENTUM RULES DISABLED (experiment/sv-hour-pure, 2026-05-22).
+        # Shadow Strategy C ran 106 trades over 4 days. Per-rule outcomes:
+        #   bullish-mean-revert: n=44, 23% WR, -$1.28/trade  (catastrophic)
+        #   bearish:             n=38, 24% WR, -$1.41/trade  (catastrophic)
+        #   hour-* (aggregate):  n=24, 75% WR, +$1.26/trade  (real signal)
+        # Validation framework cross-confirmed: HourBiasOnly PASS; momentum
+        # variants FAIL. Drop momentum rules entirely. drift/trend args kept
+        # for signature compatibility — unused.
+        _ = (drift, trend)
 
         if hour_utc in self.no_hours:
             return "no", f"hour-{hour_utc}-NO"
