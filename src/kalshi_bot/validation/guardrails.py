@@ -26,20 +26,20 @@ def check_market_collision(
     strategies: dict[str, object],
     markets: list,
 ) -> list[str]:
-    ticker_to_names: dict[str, list[str]] = {}
+    ticker_to_names: dict[str, set[str]] = {}
     for name, strategy in strategies.items():
         for market in markets:
             sig = strategy.evaluate(market)
             if sig is not None:
-                ticker_to_names.setdefault(sig.ticker, []).append(name)
+                ticker_to_names.setdefault(sig.ticker, set()).add(name)
 
     warnings = []
     for ticker, names in ticker_to_names.items():
         if len(names) >= 2:
-            quoted = " and ".join(repr(n) for n in names)
+            quoted = " and ".join(repr(n) for n in sorted(names))
             warnings.append(
                 f"WARNING: market collision on {ticker} — "
-                f"Both {quoted} are signalling this ticker. "
+                f"Strategies {quoted} are all signalling this ticker. "
                 "They will compete for the same fill. Verify this is intentional."
             )
     return warnings
