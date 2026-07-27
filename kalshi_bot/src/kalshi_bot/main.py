@@ -19,7 +19,6 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
-from .golf_strategy import GolfValueStrategy
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -162,8 +161,6 @@ def _apply_orderbook_delta(msg: dict, ws_market_cache: dict[str, dict]) -> None:
 
 
 def _passes_signal_filters(signal, settings: Settings) -> bool:
-    if signal.strategy.startswith("golf_"):
-        return True
     if not settings.enable_signal_filters:
         return True
 
@@ -203,8 +200,6 @@ def _passes_signal_filters(signal, settings: Settings) -> bool:
 
 def _shadow_side(signal, settings: Settings) -> str | None:
     """Return a shadow status when a signal should be observed but not traded."""
-    if signal.strategy.startswith("golf_") and settings.golf_shadow_mode:
-        return "shadow_golf"
     if settings.live_side_mode == "yes_only" and signal.side == "no":
         return "shadow_no"
     return None
@@ -315,9 +310,17 @@ def main() -> None:
         min_edge_cents=settings.crypto_min_edge_cents,
         max_spread_cents=settings.crypto_max_spread_cents,
         min_score=settings.crypto_min_score,
+        min_open_interest=settings.crypto_min_open_interest,
+        min_volume_24h=settings.crypto_min_volume_24h,
+        min_secs_left=settings.crypto_min_secs_left,
+        max_secs_left=settings.crypto_max_secs_left,
+        min_premium_cents=settings.crypto_min_premium_cents,
+        max_premium_cents=settings.crypto_max_premium_cents,
+        max_confidence=settings.crypto_max_confidence,
+        max_abs_d2=settings.crypto_max_abs_d2,
+        momentum_cache_ttl_seconds=settings.crypto_momentum_cache_ttl_seconds,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    golf_strategy = GolfValueStrategy(api_client, settings) if settings.enable_golf_strategy else None
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:
@@ -364,20 +367,12 @@ def main() -> None:
             if sig and _passes_signal_filters(sig, settings):
                 signals.append(sig)
 
-        if golf_strategy:
-            for sig in golf_strategy.iter_signals():
-                if _passes_signal_filters(sig, settings):
-                    signals.append(sig)
-
         render_signals(signals)
 
         for sig in sorted(signals, key=lambda s: s.score, reverse=True)[: settings.max_signals_per_loop]:
             shadow_status = _shadow_side(sig, settings)
             if shadow_status:
-                if shadow_status == "shadow_golf":
-                    status_reason = "golf_shadow_mode"
-                else:
-                    status_reason = f"live_side_mode_{settings.live_side_mode}"
+                status_reason = f"live_side_mode_{settings.live_side_mode}"
                 logging.info("trade result: %s", shadow_status)
                 journal.log_signal(
                     sig,

@@ -13,8 +13,8 @@ from .models import Market, Signal
 
 
 ASSET_CONFIG = {
-    "KXBTC15M": {"product": "BTC-USD", "vol_mult": 1.00},
-    "KXETH15M": {"product": "ETH-USD", "vol_mult": 1.10},
+    "KXBTC15M": {"product": "BTC-USD", "vol_mult": 3.50},
+    "KXETH15M": {"product": "ETH-USD", "vol_mult": 3.50},
 }
 
 # Coinbase API cache TTLs
@@ -49,6 +49,8 @@ _open_spot_cache: dict[tuple[str, int], tuple[float, float]] = {}
 
 # {product: (sigma, fetched_at)}
 _vol_cache: dict[str, tuple[float, float]] = {}
+# {product: (return_5m, fetched_at)}
+_momentum_cache: dict[str, tuple[float, float]] = {}
 
 
 def _fetch_with_retry(url: str, params: dict | None = None, retries: int = 2) -> requests.Response:
@@ -238,12 +240,52 @@ class CryptoProbStrategy:
     client: KalshiHttpClient | None = None
 
     min_edge_cents: int = 6
-    # 45¢ cap rejects truly implausible edges that indicate a model failure
-    # (e.g. wrong strike fetch, extreme vol spike).  All real edges trade.
-    max_edge_cents: int = 45
+    # Edges beyond this under the vol×3.5 model signal a data fault (stale
+    # strike, vol spike), not real opportunity — guard, not a tuning knob.
+    max_edge_cents: int = 30
     max_spread_cents: int = 10
     min_score: float = 6.0
+    # Loose sanity ceiling; the real selectivity comes from the premium band.
+    max_score: float = 25.0
     momentum_scaling_factor: float = 0.15  # Confidence boost (10-20% range) when price momentum aligns
+    min_open_interest: float = 1.0
+    min_volume_24h: float = 100.0
+    min_secs_left: int = 45
+    max_secs_left: int = 930
+    min_premium_cents: int = 22
+    max_premium_cents: int = 35
+    max_confidence: float = 0.95
+    max_abs_d2: float = 6.0
+    momentum_cache_ttl_seconds: float = 20.0
+
+    def _five_min_return(self, spot_now: float, product: str) -> float | None:
+        now = time.monotonic()
+        cached = _momentum_cache.get(product)
+        if cached and (now - cached[1]) < self.momentum_cache_ttl_seconds:
+            return cached[0]
+
+        now_utc = datetime.now(timezone.utc)
+        start = now_utc - timedelta(minutes=7)
+        end = now_utc - timedelta(minutes=4)
+        resp = _fetch_with_retry(
+            f"https://api.exchange.coinbase.com/products/{product}/candles",
+            params={
+                "granularity": 60,
+                "start": start.isoformat().replace("+00:00", "Z"),
+                "end": end.isoformat().replace("+00:00", "Z"),
+            },
+        )
+        candles = resp.json()
+        if not candles:
+            return None
+
+        spot_5m_ago = float(sorted(candles, key=lambda c: c[0])[0][4])
+        if spot_5m_ago <= 0:
+            return None
+
+        ret_5m = (spot_now - spot_5m_ago) / spot_5m_ago
+        _momentum_cache[product] = (ret_5m, now)
+        return ret_5m
 
     def _calculate_momentum_boost(self, spot_now: float, product: str, side: str) -> float:
         """Calculate confidence boost from 5-minute price momentum.
@@ -260,31 +302,9 @@ class CryptoProbStrategy:
             Confidence boost (0.0 if momentum opposes or absent)
         """
         try:
-            # Fetch 1-minute candles from ~5 minutes ago
-            now_utc = datetime.now(timezone.utc)
-            start = now_utc - timedelta(minutes=7)
-            end = now_utc - timedelta(minutes=4)
-
-            resp = _fetch_with_retry(
-                f"https://api.exchange.coinbase.com/products/{product}/candles",
-                params={
-                    "granularity": 60,
-                    "start": start.isoformat().replace("+00:00", "Z"),
-                    "end": end.isoformat().replace("+00:00", "Z"),
-                },
-            )
-            candles = resp.json()
-            if not candles:
+            return_5m = self._five_min_return(spot_now, product)
+            if return_5m is None:
                 return 0.0
-
-            # Get spot from earliest candle (closest to 5 min ago)
-            spot_5m_ago = float(sorted(candles, key=lambda c: c[0])[0][4])
-
-            if spot_5m_ago <= 0:
-                return 0.0
-
-            # Calculate 5-minute return
-            return_5m = (spot_now - spot_5m_ago) / spot_5m_ago
 
             # Determine if momentum aligns with trade direction
             if side == "yes" and return_5m > 0:
@@ -317,16 +337,18 @@ class CryptoProbStrategy:
 
         # ---- market price ----------------------------------------- #
         sane_book = (
-            market.yes_bid >= 0
+            market.yes_bid > 0
             and market.yes_ask > 0
+            and market.yes_ask < 100
             and market.yes_bid < market.yes_ask
         )
-        if sane_book and market.yes_bid > 0:
-            market_price = (market.yes_bid + market.yes_ask) / 2.0
-        elif market.last_price > 0:
-            market_price = float(market.last_price)
-        else:
+        if not sane_book:
             return None
+
+        if market.open_interest < self.min_open_interest or market.volume_24h < self.min_volume_24h:
+            return None
+
+        market_price = (market.yes_bid + market.yes_ask) / 2.0
 
         if market_price <= 1 or market_price >= 99:
             return None
@@ -340,7 +362,7 @@ class CryptoProbStrategy:
         if secs_left is None:
             logging.debug("strategy: REJECT %s missing secs_left", market.ticker)
             return None
-        if secs_left < 30:
+        if secs_left < self.min_secs_left or secs_left > self.max_secs_left:
             return None
 
         # ---- current spot ----------------------------------------- #
@@ -422,6 +444,9 @@ class CryptoProbStrategy:
         # ITM/OTM positions deserve MORE confidence, not less.
         sigma_t = sigma * math.sqrt(max(secs_left, 1.0) / (365.25 * 24 * 3600))
         d2 = abs(math.log(spot_now / strike_price)) / max(sigma_t, 1e-9)
+        if d2 > self.max_abs_d2:
+            logging.debug("strategy: REJECT %s d2 too extreme: %.2f", market.ticker, d2)
+            return None
 
         if d2 >= 2.0:
             confidence = 1.00   # deep ITM/OTM — outcome nearly certain
@@ -435,10 +460,19 @@ class CryptoProbStrategy:
         # ---- momentum boost ---------------------------------------- #
         # Amplify confidence when recent price movement aligns with trade direction
         side = "yes" if raw_edge > 0 else "no"
+        if side == "no":
+            return None
         momentum_boost = self._calculate_momentum_boost(spot_now, product, side)
-        confidence = min(1.0, confidence + momentum_boost)
+        confidence = min(self.max_confidence, confidence + momentum_boost)
 
         premium_cents = market_price if side == "yes" else (100.0 - market_price)
+        if premium_cents < self.min_premium_cents or premium_cents > self.max_premium_cents:
+            logging.debug(
+                "strategy: REJECT %s premium outside bounds: %.1f",
+                market.ticker,
+                premium_cents,
+            )
+            return None
         ev_cents = abs(raw_edge)
         ev_roi = ev_cents / max(premium_cents, 1e-9)
 
@@ -447,9 +481,9 @@ class CryptoProbStrategy:
         spread_penalty = spread * 0.15
         adjusted_edge = (abs(raw_edge) * confidence) - spread_penalty
 
-        if adjusted_edge < self.min_score:
+        if adjusted_edge < self.min_score or adjusted_edge > self.max_score:
             logging.debug(
-                "strategy: REJECT %s score too low: %.2f", market.ticker, adjusted_edge
+                "strategy: REJECT %s score out of bounds: %.2f", market.ticker, adjusted_edge
             )
             return None
 

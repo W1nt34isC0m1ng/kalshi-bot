@@ -1,0 +1,13 @@
+/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+240 markets in window
+  kalshi trades [25/240] rows=220033
+  kalshi trades [50/240] rows=397749
+  kalshi trades [75/240] rows=634286
+  kalshi trades [100/240] rows=906683
+  kalshi trades [125/240] rows=1078091
+  kalshi trades [150/240] rows=1229718
+  kalshi trades [175/240] rows=1449552
+  kalshi trades [200/240] rows=1675636
+  kalshi trades [225/240] rows=1816091
+saved 1900886 trades for 240 markets

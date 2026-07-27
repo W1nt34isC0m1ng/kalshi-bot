@@ -1,0 +1,65 @@
+/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+Collecting up to 1500 settled KXBTC15M markets...
+  markets so far: 200 (last close 2026-06-08T16:00:00Z)
+  markets so far: 400 (last close 2026-06-06T14:00:00Z)
+  markets so far: 600 (last close 2026-06-04T12:00:00Z)
+  markets so far: 800 (last close 2026-06-02T07:00:00Z)
+  markets so far: 1000 (last close 2026-05-31T05:00:00Z)
+  markets so far: 1200 (last close 2026-05-29T03:00:00Z)
+  markets so far: 1400 (last close 2026-05-26T22:00:00Z)
+  markets so far: 1600 (last close 2026-05-24T20:00:00Z)
+Got 1500 markets, range 2026-05-25T21:00:00Z .. 2026-06-10T17:45:00Z
+Collecting candlesticks...
+  candles [50/1500] rows=800
+  candles [100/1500] rows=1600
+  candles [150/1500] rows=2400
+  candles [200/1500] rows=3200
+  candles [250/1500] rows=4000
+  candles [300/1500] rows=4800
+  candles [350/1500] rows=5588
+  candles [400/1500] rows=6388
+  candles [450/1500] rows=7188
+  candles [500/1500] rows=7988
+  candles [550/1500] rows=8788
+  candles [600/1500] rows=9588
+  candles [650/1500] rows=10388
+  candles [700/1500] rows=11188
+  candles [750/1500] rows=11988
+  candles [800/1500] rows=12788
+  candles [850/1500] rows=13588
+  candles [900/1500] rows=14388
+  candles [950/1500] rows=15188
+  candles [1000/1500] rows=15988
+  candles [1050/1500] rows=16788
+  candles [1100/1500] rows=17588
+  candles [1150/1500] rows=18388
+  candles [1200/1500] rows=19188
+  candles [1250/1500] rows=19988
+  candles [1300/1500] rows=20788
+  candles [1350/1500] rows=21588
+  candles [1400/1500] rows=22388
+  candles [1450/1500] rows=23188
+  candles [1500/1500] rows=23988
+Traceback (most recent call last):
+  File "/Users/default/dev/kalshi-bot/research/collect_kalshi.py", line 123, in <module>
+    main()
+  File "/Users/default/dev/kalshi-bot/research/collect_kalshi.py", line 118, in main
+    candles.to_parquet("data/kalshi_candles.parquet", index=False)
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/util/_decorators.py", line 333, in wrapper
+    return func(*args, **kwargs)
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/core/frame.py", line 3124, in to_parquet
+    return to_parquet(
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/io/parquet.py", line 478, in to_parquet
+    impl = get_engine(engine)
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/io/parquet.py", line 64, in get_engine
+    return engine_class()
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/io/parquet.py", line 170, in __init__
+    import pandas.core.arrays.arrow.extension_types  # pyright: ignore[reportUnusedImport] # noqa: F401
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/core/arrays/arrow/extension_types.py", line 174, in <module>
+    patch_pyarrow()
+  File "/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/pandas/core/arrays/arrow/extension_types.py", line 166, in patch_pyarrow
+    pyarrow.unregister_extension_type("arrow.py_extension_type")
+  File "pyarrow/types.pxi", line 2280, in pyarrow.lib.unregister_extension_type
+  File "pyarrow/error.pxi", line 92, in pyarrow.lib.check_status
+pyarrow.lib.ArrowKeyError: No type extension with name arrow.py_extension_type found

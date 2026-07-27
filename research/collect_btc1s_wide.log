@@ -1,0 +1,31 @@
+/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+btc 1s 1779741780..1781113620 (15.9 days)
+  binance 1s rows=50000 at 2026-05-26 10:36:20+00:00
+  binance 1s rows=100000 at 2026-05-27 00:29:40+00:00
+  binance 1s rows=150000 at 2026-05-27 14:23:00+00:00
+  binance 1s rows=200000 at 2026-05-28 04:16:20+00:00
+  binance 1s rows=250000 at 2026-05-28 18:09:40+00:00
+  binance 1s rows=300000 at 2026-05-29 08:03:00+00:00
+  binance 1s rows=350000 at 2026-05-29 21:56:20+00:00
+  binance 1s rows=400000 at 2026-05-30 11:49:40+00:00
+  binance 1s rows=450000 at 2026-05-31 01:43:00+00:00
+  binance 1s rows=500000 at 2026-05-31 15:36:20+00:00
+  binance 1s rows=550000 at 2026-06-01 05:29:40+00:00
+  binance 1s rows=600000 at 2026-06-01 19:23:00+00:00
+  binance 1s rows=650000 at 2026-06-02 09:16:20+00:00
+  binance 1s rows=700000 at 2026-06-02 23:09:40+00:00
+  binance 1s rows=750000 at 2026-06-03 13:03:00+00:00
+  binance 1s rows=800000 at 2026-06-04 02:56:20+00:00
+  binance 1s rows=850000 at 2026-06-04 16:49:40+00:00
+  binance 1s rows=900000 at 2026-06-05 06:43:00+00:00
+  binance 1s rows=950000 at 2026-06-05 20:36:20+00:00
+  binance 1s rows=1000000 at 2026-06-06 10:29:40+00:00
+  binance 1s rows=1050000 at 2026-06-07 00:23:00+00:00
+  binance 1s rows=1100000 at 2026-06-07 14:16:20+00:00
+  binance 1s rows=1150000 at 2026-06-08 04:09:40+00:00
+  binance 1s rows=1200000 at 2026-06-08 18:03:00+00:00
+  binance 1s rows=1250000 at 2026-06-09 07:56:20+00:00
+  binance 1s rows=1300000 at 2026-06-09 21:49:40+00:00
+  binance 1s rows=1350000 at 2026-06-10 11:43:00+00:00
+saved 1371841 1s candles

@@ -1,0 +1,20 @@
+/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+1500 markets, 0 already done, 1500 to fetch
+  shard 0: 906683 trades after 100/1500 markets
+  shard 1: 768953 trades after 200/1500 markets
+  shard 2: 750509 trades after 300/1500 markets
+  shard 3: 774925 trades after 400/1500 markets
+  shard 4: 720842 trades after 500/1500 markets
+  shard 5: 702824 trades after 600/1500 markets
+  shard 6: 672896 trades after 700/1500 markets
+  shard 7: 682712 trades after 800/1500 markets
+  shard 8: 746861 trades after 900/1500 markets
+  ERR KXBTC15M-26MAY311600-00: 502 Server Error: Bad Gateway for url: https://api.elections.kalshi.com/trade-api/v2/markets/trades?ticker=KXBTC15M-26MAY311600-00&limit=1000&cursor=EhIKEGB6ygxs3khOt8iIzcfMPlIaDAjAoPLQBhCItvzMAg
+  shard 9: 708207 trades after 1000/1500 markets
+  shard 10: 699813 trades after 1100/1500 markets
+  shard 11: 741114 trades after 1200/1500 markets
+  shard 12: 744618 trades after 1300/1500 markets
+  shard 13: 634654 trades after 1400/1500 markets
+  shard 14: 642376 trades after 1500/1500 markets
+done

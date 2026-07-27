@@ -1,0 +1,15 @@
+/Users/default/dev/kalshi-bot/kalshi_bot/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+== KXETH15M (ETH-USD) ==
+  700 markets
+  10746 coinbase candles
+== KXSOL15M (SOL-USD) ==
+  700 markets
+  10749 coinbase candles
+== KXDOGE15M (DOGE-USD) ==
+  700 markets
+  10699 coinbase candles
+== KXXRP15M (XRP-USD) ==
+  700 markets
+  10756 coinbase candles
+saved 2800 markets, 44694 candles, 42950 cb rows
