@@ -16,6 +16,7 @@ from collections import defaultdict
 
 import requests
 
+from backtest import calculate_trade_pnl
 from src.kalshi_bot.mean_reversion_strategy import MeanReversionStrategy, _asset_prefix_from_ticker
 from src.kalshi_bot.models import Market
 
@@ -126,13 +127,9 @@ def resolve_yes_outcome(ticker: str, product: str, expiry_time: datetime) -> tup
 
 
 def pnl_for_trade(side: str, price: int, yes_outcome: int) -> tuple[bool, float]:
-    """Calculate P&L."""
-    side = side.lower()
-    won = (yes_outcome == 1 and side == "yes") or (yes_outcome == 0 and side == "no")
-    cost = price if side == "yes" else (100 - price)
-    payout = 100 if won else 0
-    pnl_cents = payout - cost
-    return won, pnl_cents
+    """Calculate single-contract gross P&L."""
+    pnl = calculate_trade_pnl(side, price, yes_outcome, contract_count=1)
+    return pnl["won"], pnl["pnl_cents_gross"]
 
 
 # ============================= BACKTESTER ==============================
@@ -207,7 +204,7 @@ class MeanReversionBacktester:
                 return {"ticker": ticker, "expiry_time": expiry_time.isoformat(), "status": "rejected"}
 
             strike, spot_at_expiry, yes_outcome = resolve_yes_outcome(ticker, product, expiry_time)
-            won, pnl_cents = pnl_for_trade(signal.side, signal.price, yes_outcome)
+            pnl = calculate_trade_pnl(signal.side, signal.price, yes_outcome, contract_count=1)
 
             return {
                 "ticker": ticker,
@@ -216,8 +213,11 @@ class MeanReversionBacktester:
                 "side": signal.side,
                 "price": signal.price,
                 "score": signal.score,
-               "won": won,
-                "pnl_cents": pnl_cents,
+                "won": pnl["won"],
+                "pnl_cents_gross": pnl["pnl_cents_gross"],
+                "fee_cents": pnl["fee_cents"],
+                "pnl_cents_net": pnl["pnl_cents_net"],
+                "pnl_cents": pnl["pnl_cents_net"],
                 "product": product,
             }
         except Exception as e:
@@ -236,22 +236,44 @@ class MeanReversionBacktester:
             print("No trades resolved.")
             return
 
-        wins = sum(1 for r in resolved if r.get("won"))
-        total_pnl = sum(r.get("pnl_cents", 0) for r in resolved)
+        wins = sum(1 for r in resolved if r.get("pnl_cents_net", 0) > 0)
+        total_pnl = sum(r.get("pnl_cents_net", 0) for r in resolved)
+        total_gross = sum(r.get("pnl_cents_gross", 0) for r in resolved)
+        total_fees = sum(r.get("fee_cents", 0) for r in resolved)
         avg_pnl = total_pnl / len(resolved)
         win_rate = wins / len(resolved)
 
         print(f"\nWins: {wins}, Losses: {len(resolved) - wins}")
-        print(f"Win Rate: {win_rate:.1%}")
-        print(f"Total P&L: ${total_pnl/100:.2f}")
-        print(f"Avg P&L/trade: {avg_pnl:.2f} cents")
+        print(f"After-fee Win Rate: {win_rate:.1%}")
+        print(f"Total Net P&L: ${total_pnl/100:.2f}")
+        print(f"Avg Net P&L/trade: {avg_pnl:.2f} cents")
+        print(f"Total Gross P&L: ${total_gross/100:.2f}")
+        print(f"Total Fees: ${total_fees/100:.2f}")
         print("=" * 60)
 
     def save_results(self, results: list[dict], path: str = OUTPUT_PATH) -> None:
         """Save results."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["ticker", "expiry_time", "status", "side", "price", "score", "won", "pnl_cents", "product"])
+            w = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "ticker",
+                    "expiry_time",
+                    "status",
+                    "side",
+                    "price",
+                    "score",
+                    "won",
+                    "pnl_cents_gross",
+                    "fee_cents",
+                    "pnl_cents_net",
+                    "pnl_cents",
+                    "product",
+                    "error",
+                ],
+                extrasaction="ignore",
+            )
             w.writeheader()
             for r in results:
                 w.writerow(r)

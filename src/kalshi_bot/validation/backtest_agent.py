@@ -4,10 +4,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# backtest.py lives at project root (not inside src/)
-_ROOT = Path(__file__).resolve().parents[3]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+# The journal backtest is part of the live package tree, not the root
+# validation package under src/.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LIVE_ROOT = _REPO_ROOT / "kalshi_bot"
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
 
 from backtest import backtest_journal  # noqa: E402
 
@@ -32,13 +34,14 @@ class BacktestWorker:
         if n_resolved == 0:
             return BacktestResult(win_rate=0.0, n_resolved=0, n_wins=0)
 
-        n_wins = int((resolved["pnl_cents"] > 0).sum())
+        pnl_column = "pnl_cents_net" if "pnl_cents_net" in resolved.columns else "pnl_cents"
+        n_wins = int((resolved[pnl_column] > 0).sum())
         win_rate = n_wins / n_resolved
 
         resolved["asset"] = resolved["ticker"].str.extract(r"^(KX[A-Z0-9]+15M)")
         by_asset: dict[str, dict] = {}
         for asset, group in resolved.dropna(subset=["asset"]).groupby("asset"):
-            wins = int((group["pnl_cents"] > 0).sum())
+            wins = int((group[pnl_column] > 0).sum())
             by_asset[str(asset)] = {
                 "count": len(group),
                 "wins": wins,

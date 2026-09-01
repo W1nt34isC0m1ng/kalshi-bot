@@ -19,7 +19,6 @@ from .market_data import MarketDataService
 from .models import Market
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
-from .golf_strategy import GolfValueStrategy
 from .ws import KalshiWebSocket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -36,6 +35,22 @@ def build_clients(settings: Settings):
         private_client = KalshiHttpClient(settings.base_url, signer=signer)
 
     return public_client, private_client, signer
+
+
+def build_golf_strategy(api_client, settings: Settings):
+    if not settings.enable_golf_strategy:
+        return None
+
+    try:
+        from .golf_strategy import GolfValueStrategy
+    except ImportError as exc:
+        logging.warning(
+            "golf: ENABLE_GOLF_STRATEGY=true but golf_strategy could not be imported (%s); disabling golf layer",
+            exc,
+        )
+        return None
+
+    return GolfValueStrategy(api_client, settings)
 
 
 def render_signals(signals):
@@ -317,7 +332,7 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    golf_strategy = GolfValueStrategy(api_client, settings) if settings.enable_golf_strategy else None
+    golf_strategy = build_golf_strategy(api_client, settings)
     journal = TradeJournal(settings.trade_journal_path)
 
     if private_client:

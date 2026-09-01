@@ -6,4 +6,5 @@ orjson>=3.10.0
 pydantic>=2.8.0
 rich>=13.7.0
 scipy>=1.7.0
+pandas>=3.0.5
 pytest>=7.0
