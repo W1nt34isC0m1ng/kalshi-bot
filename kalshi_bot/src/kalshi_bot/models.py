@@ -90,6 +90,13 @@ class Signal:
     ev_cents: float = 0.0
     ev_roi: float = 0.0
     momentum_boost: float = 0.0
+    spot: float | None = None
+    strike: float | None = None
+    sigma: float | None = None
+    d2: float | None = None
+    secs_left: float | None = None
+    fair: float | None = None
+    raw_edge: float | None = None
     yes_bid: int | None = None
     yes_ask: int | None = None
     strategy: str = "generic"

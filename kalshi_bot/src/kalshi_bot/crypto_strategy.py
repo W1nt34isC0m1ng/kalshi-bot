@@ -481,6 +481,13 @@ class CryptoProbStrategy:
                 f"momentum_boost={momentum_boost:.2f}"
             ),
             momentum_boost=momentum_boost,
+            spot=float(round(spot_now, 8)),
+            strike=float(round(strike_price, 8)),
+            sigma=float(round(sigma, 8)),
+            d2=float(round(d2, 8)),
+            secs_left=float(round(secs_left, 2)),
+            fair=float(round(fair_cents, 4)),
+            raw_edge=float(round(raw_edge, 4)),
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
             strategy="crypto_prob",

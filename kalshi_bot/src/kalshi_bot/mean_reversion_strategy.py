@@ -463,6 +463,9 @@ class MeanReversionStrategy:
 
         # Determine side based on highest edge direction
         side = "yes" if raw_edge > 0 else "no"
+        premium_cents = market_price if side == "yes" else (100.0 - market_price)
+        ev_cents = abs(raw_edge)
+        ev_roi = ev_cents / max(premium_cents, 1e-9)
 
         logging.info(
             "mean_reversion: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
@@ -477,11 +480,25 @@ class MeanReversionStrategy:
             side=side,
             price=max(1, min(99, int(round(market_price)))),
             edge_cents=int(round(abs(raw_edge))),
+            ev_cents=float(round(ev_cents, 2)),
+            ev_roi=float(round(ev_roi, 4)),
             spread_cents=int(round(spread)),
             score=float(round(adjusted_edge, 2)),
             reason=(
                 f"mean_reversion: spot={spot_now:.2f}, strike={strike_price:.2f}, "
-                f"d2={d2:.2f}, conf={confidence:.2f}, vol={sigma:.2f}, "
-                f"fair={fair_cents:.1f}, position_size={position_size}"
+                f"secs_left={secs_left:.0f}, d2={d2:.2f}, conf={confidence:.2f}, "
+                f"sigma={sigma:.2f}, fair={fair_cents:.1f}, raw_edge={raw_edge:.1f}, "
+                f"momentum_boost={anti_momentum_boost:.2f}, position_size={position_size}"
             ),
+            momentum_boost=anti_momentum_boost,
+            spot=float(round(spot_now, 8)),
+            strike=float(round(strike_price, 8)),
+            sigma=float(round(sigma, 8)),
+            d2=float(round(d2, 8)),
+            secs_left=float(round(secs_left, 2)),
+            fair=float(round(fair_cents, 4)),
+            raw_edge=float(round(raw_edge, 4)),
+            yes_bid=market.yes_bid,
+            yes_ask=market.yes_ask,
+            strategy="mean_reversion",
         )

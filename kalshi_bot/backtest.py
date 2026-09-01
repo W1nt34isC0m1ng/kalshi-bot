@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -11,6 +13,16 @@ import requests
 
 JOURNAL_PATH = "logs/trade_journal.csv"
 OUTPUT_PATH = "logs/trade_backtest_results.csv"
+
+# Kalshi binary fee estimate for journal dry-runs.
+#
+# live_account_report.py uses exchange-returned maker_fees_dollars and
+# taker_fees_dollars. Dry-run journals do not have exchange fee fields, so the
+# backtest estimates fees with Kalshi's public binary-contract formula:
+#   fee = ceil($0.07 * contracts * price * (1 - price) to whole cents)
+# where price is the bought contract premium in dollars. The estimate is
+# charged once on entry and subtracted from realized gross P&L.
+KALSHI_BINARY_FEE_RATE_DOLLARS = Decimal("0.07")
 
 COINBASE_PRODUCTS = {
     "KXBTC15M": "BTC-USD",
@@ -98,6 +110,230 @@ def round_target(value: float, product: str) -> float:
     return round(value, get_precision_for_product(product))
 
 
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and value == "":
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _optional_int(value: Any) -> int | None:
+    if _is_missing(value):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if _is_missing(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    if hasattr(row, "get"):
+        value = row.get(key, default)
+    else:
+        value = default
+    return default if _is_missing(value) else value
+
+
+def premium_cents_for_side(side: str, yes_price_cents: int) -> int:
+    """Return the bought contract premium in cents for a YES-equivalent price."""
+    normalized = (side or "").lower()
+    if normalized == "yes":
+        return yes_price_cents
+    if normalized == "no":
+        return 100 - yes_price_cents
+    raise ValueError(f"Unknown binary side: {side!r}")
+
+
+def estimate_kalshi_fee_cents(side: str, yes_price_cents: int, contract_count: int = 1) -> int:
+    """Estimate Kalshi binary-contract fees in cents for a dry-run order."""
+    if contract_count <= 0:
+        return 0
+
+    premium_cents = premium_cents_for_side(side, yes_price_cents)
+    if premium_cents <= 0 or premium_cents >= 100:
+        return 0
+
+    premium_dollars = Decimal(premium_cents) / Decimal(100)
+    fee_dollars = (
+        KALSHI_BINARY_FEE_RATE_DOLLARS
+        * Decimal(contract_count)
+        * premium_dollars
+        * (Decimal(1) - premium_dollars)
+    )
+    return int((fee_dollars * Decimal(100)).to_integral_value(rounding=ROUND_CEILING))
+
+
+def calculate_trade_pnl(
+    side: str,
+    yes_price_cents: int,
+    yes_outcome: int,
+    contract_count: int = 1,
+) -> dict[str, int | bool]:
+    """Compute gross and after-fee P&L for a binary dry-run trade."""
+    normalized_side = (side or "").lower()
+    won = (yes_outcome == 1 and normalized_side == "yes") or (
+        yes_outcome == 0 and normalized_side == "no"
+    )
+    premium_cents = premium_cents_for_side(normalized_side, yes_price_cents)
+    payout_cents = 100 if won else 0
+    pnl_cents_gross = (payout_cents - premium_cents) * max(contract_count, 0)
+    fee_cents = estimate_kalshi_fee_cents(normalized_side, yes_price_cents, contract_count)
+
+    return {
+        "won": won,
+        "pnl_cents_gross": pnl_cents_gross,
+        "fee_cents": fee_cents,
+        "pnl_cents_net": pnl_cents_gross - fee_cents,
+    }
+
+
+def contract_count_from_row(row: Any) -> int:
+    """Prefer actual fills, then intended dry-run size, then a single contract."""
+    for key in ("filled_count", "requested_count", "contract_count"):
+        count = _optional_int(_row_value(row, key))
+        if count is not None and count > 0:
+            return count
+    return 1
+
+
+_REASON_VALUE_RE = re.compile(r"(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)=(?P<value>[-+]?\d+(?:\.\d+)?)")
+
+
+def _reason_number(reason: Any, key: str) -> float | None:
+    if _is_missing(reason):
+        return None
+    for match in _REASON_VALUE_RE.finditer(str(reason)):
+        if match.group("key").lower() == key.lower():
+            return _optional_float(match.group("value"))
+    return None
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if _is_missing(value):
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _range_bucket(value: float | None, ranges: list[tuple[float, float, str]], *, overflow: str | None = None) -> str | None:
+    if value is None:
+        return None
+    for lower, upper, label in ranges:
+        if lower < value <= upper:
+            return label
+    if overflow is not None and value > ranges[-1][1]:
+        return overflow
+    return None
+
+
+def secs_left_bucket(secs_left: float | None) -> str | None:
+    return _range_bucket(
+        secs_left,
+        [
+            (600, 900, "900-600"),
+            (300, 600, "600-300"),
+            (90, 300, "300-90"),
+            (30, 90, "90-30"),
+        ],
+    )
+
+
+def d2_bucket(d2: float | None) -> str | None:
+    if d2 is None:
+        return None
+    return _range_bucket(
+        abs(d2),
+        [
+            (-1, 0.5, "0-0.5"),
+            (0.5, 1.0, "0.5-1.0"),
+            (1.0, 1.5, "1.0-1.5"),
+            (1.5, 2.0, "1.5-2.0"),
+        ],
+        overflow="2.0+",
+    )
+
+
+def spread_bucket(spread_cents: float | None) -> str | None:
+    return _range_bucket(
+        spread_cents,
+        [
+            (-1, 0, "0"),
+            (0, 2, "1-2"),
+            (2, 5, "3-5"),
+            (5, 10, "5-10"),
+        ],
+        overflow="10+",
+    )
+
+
+def edge_bucket(edge_cents: float | None) -> str | None:
+    return _range_bucket(
+        edge_cents,
+        [
+            (-1, 3, "0-3"),
+            (3, 6, "3-6"),
+            (6, 10, "6-10"),
+        ],
+        overflow="10+",
+    )
+
+
+def regime_labels_for_trade(row: Any) -> dict[str, object]:
+    ticker = str(_row_value(row, "ticker", "") or "")
+    asset = asset_prefix_from_ticker(ticker)
+    reason = _row_value(row, "reason", "")
+    trade_time = _parse_timestamp(_row_value(row, "ts_utc")) or _parse_timestamp(
+        _row_value(row, "expiry_time")
+    )
+
+    hour_et = None
+    hour_et_band = None
+    if trade_time is not None:
+        local_time = trade_time.astimezone(ZoneInfo("America/New_York"))
+        hour_et = local_time.hour
+        minutes = (local_time.hour * 60) + local_time.minute
+        hour_et_band = "cash_hours" if (9 * 60 + 30) <= minutes < (16 * 60) else "other"
+
+    secs_left = _optional_float(_row_value(row, "secs_left"))
+    if secs_left is None:
+        secs_left = _reason_number(reason, "secs_left")
+    d2_value = _optional_float(_row_value(row, "d2"))
+    if d2_value is None:
+        d2_value = _reason_number(reason, "d2")
+    spread = _optional_float(_row_value(row, "spread_cents"))
+    edge = _optional_float(_row_value(row, "edge_cents"))
+    side = str(_row_value(row, "side", "") or "").lower() or None
+
+    return {
+        "asset": asset,
+        "hour_et": hour_et,
+        "hour_et_band": hour_et_band,
+        "secs_left_bucket": secs_left_bucket(secs_left),
+        "d2_bucket": d2_bucket(d2_value),
+        "spread_bucket": spread_bucket(spread),
+        "side": side,
+        "edge_bucket": edge_bucket(edge),
+    }
+
+
 def fetch_coinbase_candles(product: str, start: datetime, end: datetime, granularity: int = 60):
     url = f"https://api.exchange.coinbase.com/products/{product}/candles"
     params = {
@@ -157,7 +393,7 @@ def resolve_yes_outcome(ticker: str, product: str, expiry_time: datetime):
 
 
 def pnl_for_trade(side: str, price: int, yes_outcome: int):
-    """Compute P&L for a trade.
+    """Compute gross P&L for a single-contract trade.
 
     `price` is always the YES mid-price (as stored in the journal).
     For a YES trade you paid `price` cents; for a NO trade you paid
@@ -165,11 +401,8 @@ def pnl_for_trade(side: str, price: int, yes_outcome: int):
         win  → 100 - cost_paid
         lose → -cost_paid
     """
-    side = side.lower()
-    won = (yes_outcome == 1 and side == "yes") or (yes_outcome == 0 and side == "no")
-    cost = price if side == "yes" else (100 - price)
-    pnl_cents = (100 - cost) if won else -cost
-    return won, pnl_cents
+    pnl = calculate_trade_pnl(side, price, yes_outcome, contract_count=1)
+    return pnl["won"], pnl["pnl_cents_gross"]
 
 
 def backtest_journal(journal_path: str) -> pd.DataFrame:
@@ -182,6 +415,7 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
     for _, row in dry.iterrows():
         ticker = str(row["ticker"])
         prefix = asset_prefix_from_ticker(ticker)
+        contract_count = contract_count_from_row(row)
 
         base = {
             "ts_utc": row["ts_utc"],
@@ -189,10 +423,21 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
             "side": row["side"],
             "price": int(row["price"]),
             "edge_cents": int(row["edge_cents"]),
+            "ev_cents": float(_row_value(row, "ev_cents", 0.0)),
             "spread_cents": int(row["spread_cents"]),
             "score": float(row["score"]),
             "reason": row["reason"],
+            "contract_count": contract_count,
+            "spot": _row_value(row, "spot", ""),
+            "strike_signal": _row_value(row, "strike", ""),
+            "sigma": _row_value(row, "sigma", ""),
+            "d2": _row_value(row, "d2", ""),
+            "secs_left": _row_value(row, "secs_left", ""),
+            "fair": _row_value(row, "fair", ""),
+            "raw_edge": _row_value(row, "raw_edge", ""),
+            "momentum_boost": _row_value(row, "momentum_boost", ""),
         }
+        base.update(regime_labels_for_trade(row))
 
         if prefix is None:
             results.append({**base, "status_bt": "error", "error": "unknown asset prefix"})
@@ -220,7 +465,14 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
                 product=product,
                 expiry_time=expiry_time,
             )
-            won, pnl_cents = pnl_for_trade(str(row["side"]), int(row["price"]), yes_outcome)
+            pnl = calculate_trade_pnl(
+                side=str(row["side"]),
+                yes_price_cents=int(row["price"]),
+                yes_outcome=yes_outcome,
+                contract_count=contract_count,
+            )
+            ev_cents_gross = float(base["ev_cents"]) * contract_count
+            ev_cents_net = ev_cents_gross - int(pnl["fee_cents"])
 
             results.append({
                 **base,
@@ -230,8 +482,13 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
                 "strike": strike,
                 "spot_at_expiry": spot_at_expiry,
                 "yes_outcome": yes_outcome,
-                "predicted_side_won": won,
-                "pnl_cents": pnl_cents,
+                "predicted_side_won": pnl["won"],
+                "pnl_cents_gross": pnl["pnl_cents_gross"],
+                "fee_cents": pnl["fee_cents"],
+                "pnl_cents_net": pnl["pnl_cents_net"],
+                "pnl_cents": pnl["pnl_cents_net"],
+                "ev_cents_gross": ev_cents_gross,
+                "ev_cents_net": ev_cents_net,
             })
         except Exception as e:
             results.append({
@@ -255,24 +512,64 @@ def print_summary(results: pd.DataFrame) -> None:
         return
 
     total = len(resolved)
-    wins = int((resolved["pnl_cents"] > 0).sum())
-    losses = int((resolved["pnl_cents"] <= 0).sum())
+    wins_net = int((resolved["pnl_cents_net"] > 0).sum())
+    losses_net = int((resolved["pnl_cents_net"] <= 0).sum())
+    wins_gross = int((resolved["pnl_cents_gross"] > 0).sum())
     print("\n===== BACKTEST SUMMARY =====")
     print(f"Resolved trades: {total}")
-    print(f"Wins:            {wins}")
-    print(f"Losses:          {losses}")
-    print(f"Win rate:        {wins/total:.2%}")
-    print(f"Total P&L:       {resolved['pnl_cents'].sum():.1f} cents")
-    print(f"Average P&L:     {resolved['pnl_cents'].mean():.2f} cents/trade")
+    print(f"Net wins:        {wins_net}")
+    print(f"Net losses:      {losses_net}")
+    print(f"After-fee WR:    {wins_net/total:.2%}")
+    print(f"Avg EV net:      {resolved['ev_cents_net'].mean():.2f} cents/trade")
+    print(f"Total net P&L:   {resolved['pnl_cents_net'].sum():.1f} cents")
+    print(f"Average net P&L: {resolved['pnl_cents_net'].mean():.2f} cents/trade")
+    print(f"Gross WR:        {wins_gross/total:.2%}")
+    print(f"Total gross P&L: {resolved['pnl_cents_gross'].sum():.1f} cents")
+    print(f"Total fees:      {resolved['fee_cents'].sum():.1f} cents")
 
-    resolved["asset"] = resolved["ticker"].str.extract(r"^(KX[A-Z0-9]+15M)")
     print("\n===== BY ASSET =====")
     print(
-        resolved.groupby("asset")["pnl_cents"]
-        .agg(["count", "sum", "mean"])
+        _regime_summary_frame(resolved, ["asset"])
         .sort_values("sum", ascending=False)
         .to_string()
     )
+    print_regime_summary(resolved)
+
+
+def _regime_summary_frame(resolved: pd.DataFrame, group_cols: list[str]) -> pd.DataFrame:
+    available_cols = [col for col in group_cols if col in resolved.columns]
+    if not available_cols:
+        return pd.DataFrame()
+
+    grouped = resolved.dropna(subset=available_cols).groupby(available_cols, dropna=False)
+    summary = grouped.agg(
+        count=("pnl_cents_net", "count"),
+        net_wins=("pnl_cents_net", lambda values: int((values > 0).sum())),
+        sum=("pnl_cents_net", "sum"),
+        mean=("pnl_cents_net", "mean"),
+        avg_ev_net=("ev_cents_net", "mean"),
+        gross_sum=("pnl_cents_gross", "sum"),
+        fees=("fee_cents", "sum"),
+    )
+    summary["after_fee_wr"] = summary["net_wins"] / summary["count"]
+    return summary[
+        ["count", "net_wins", "after_fee_wr", "avg_ev_net", "sum", "mean", "gross_sum", "fees"]
+    ]
+
+
+def _print_regime_table(title: str, resolved: pd.DataFrame, group_cols: list[str]) -> None:
+    summary = _regime_summary_frame(resolved, group_cols)
+    print(f"\n===== {title} =====")
+    if summary.empty:
+        print("No parseable rows.")
+        return
+    print(summary.sort_values(["sum", "count"], ascending=[False, False]).to_string())
+
+
+def print_regime_summary(resolved: pd.DataFrame) -> None:
+    _print_regime_table("REGIME: ASSET x HOUR_ET_BAND", resolved, ["asset", "hour_et_band"])
+    _print_regime_table("REGIME: SECS_LEFT_BUCKET", resolved, ["secs_left_bucket"])
+    _print_regime_table("REGIME: ABS_D2_BUCKET", resolved, ["d2_bucket"])
 
 
 def main():

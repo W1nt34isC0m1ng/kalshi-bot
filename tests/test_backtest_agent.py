@@ -38,6 +38,31 @@ def test_backtest_worker_win_rate(tmp_path):
     assert result.win_rate == pytest.approx(0.75)
 
 
+def test_backtest_worker_prefers_after_fee_pnl_when_available(tmp_path):
+    journal = tmp_path / "journal.csv"
+    journal.write_text("ts_utc,ticker\n")
+
+    df = _resolved_df([
+        {
+            "pnl_cents": 2,
+            "pnl_cents_net": -1,
+            "ticker": "KXBTC15M-26JAN011200-00",
+        },
+        {
+            "pnl_cents": 55,
+            "pnl_cents_net": 53,
+            "ticker": "KXBTC15M-26JAN011215-15",
+        },
+    ])
+
+    with patch("kalshi_bot.validation.backtest_agent.backtest_journal", return_value=df):
+        result = BacktestWorker(journal_path=str(journal)).run()
+
+    assert result.n_resolved == 2
+    assert result.n_wins == 1
+    assert result.win_rate == pytest.approx(0.5)
+
+
 def test_backtest_worker_empty_resolved(tmp_path):
     journal = tmp_path / "journal.csv"
     journal.write_text("ts_utc,ticker\n")

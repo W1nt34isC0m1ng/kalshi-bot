@@ -92,6 +92,34 @@ def test_shadow_worker_counts_losses(tmp_path):
     assert result.win_rate == pytest.approx(0.0)
 
 
+def test_shadow_worker_uses_after_fee_win_rate(tmp_path):
+    market = _market()
+    strategy = MagicMock()
+    strategy.evaluate.return_value = Signal(
+        ticker=market.ticker, title="BTC 15m", side="yes",
+        price=99, edge_cents=1, spread_cents=1, score=1.0, reason="test",
+    )
+    market_data = MagicMock()
+    market_data.iter_open_markets.return_value = [market]
+
+    expiry = datetime.now(timezone.utc) - timedelta(minutes=30)
+    worker = _make_worker(tmp_path, strategy, market_data, min_fills=1)
+
+    with patch("kalshi_bot.validation.shadow_agent.parse_market_ticker",
+               return_value=("KXBTC15M", expiry, "00")), \
+         patch("kalshi_bot.validation.shadow_agent.resolve_yes_outcome",
+               return_value=(95000.0, 96000.0, 1)), \
+         patch("kalshi_bot.validation.shadow_agent.asset_prefix_from_ticker",
+               return_value="KXBTC15M"), \
+         patch("kalshi_bot.validation.shadow_agent.COINBASE_PRODUCTS",
+               {"KXBTC15M": "BTC-USD"}):
+        result = worker.run()
+
+    assert result.n_fills == 1
+    assert result.n_wins == 0
+    assert result.win_rate == pytest.approx(0.0)
+
+
 def test_shadow_worker_skips_none_signals(tmp_path):
     market_a = _market("KXBTC15M-26JAN011200-00")
     market_b = _market("KXBTC15M-26JAN011215-15")

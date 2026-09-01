@@ -32,6 +32,14 @@ class TradeJournal:
         "spread_cents",
         "score",
         "reason",
+        "spot",
+        "strike",
+        "sigma",
+        "d2",
+        "secs_left",
+        "fair",
+        "raw_edge",
+        "momentum_boost",
         "status",
         "status_reason",
         "order_id",
@@ -132,6 +140,10 @@ class TradeJournal:
     ) -> None:
         if not self._enabled:
             return
+
+        def _csv_value(value):
+            return "" if value is None else value
+
         row = {
             "ts_utc": datetime.now(timezone.utc).isoformat(),
             "strategy": signal.strategy,
@@ -144,6 +156,14 @@ class TradeJournal:
             "spread_cents": signal.spread_cents,
             "score": signal.score,
             "reason": signal.reason,
+            "spot": _csv_value(signal.spot),
+            "strike": _csv_value(signal.strike),
+            "sigma": _csv_value(signal.sigma),
+            "d2": _csv_value(signal.d2),
+            "secs_left": _csv_value(signal.secs_left),
+            "fair": _csv_value(signal.fair),
+            "raw_edge": _csv_value(signal.raw_edge),
+            "momentum_boost": signal.momentum_boost,
             "status": status,
             "status_reason": status_reason,
             "order_id": order_id,

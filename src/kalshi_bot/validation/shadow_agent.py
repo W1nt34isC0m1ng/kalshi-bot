@@ -9,15 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-_ROOT = Path(__file__).resolve().parents[3]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_LIVE_ROOT = _REPO_ROOT / "kalshi_bot"
+if str(_LIVE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIVE_ROOT))
 
 from backtest import (  # noqa: E402
     COINBASE_PRODUCTS,
     asset_prefix_from_ticker,
+    calculate_trade_pnl,
     parse_market_ticker,
-    pnl_for_trade,
     resolve_yes_outcome,
 )
 
@@ -30,7 +31,8 @@ class StrategyProtocol(Protocol):
 
 _FIELDNAMES = [
     "ts_utc", "ticker", "side", "price", "expiry_time",
-    "product", "status", "yes_outcome", "won", "pnl_cents",
+    "product", "status", "yes_outcome", "won", "pnl_cents_gross",
+    "fee_cents", "pnl_cents_net", "pnl_cents",
 ]
 
 
@@ -84,7 +86,8 @@ class ShadowWorker:
             "ts_utc": datetime.now(timezone.utc).isoformat(),
             "ticker": fill.ticker, "side": fill.side, "price": fill.price,
             "expiry_time": fill.expiry_time.isoformat(), "product": fill.product,
-            "status": "shadow_pending", "yes_outcome": "", "won": "", "pnl_cents": "",
+            "status": "shadow_pending", "yes_outcome": "", "won": "",
+            "pnl_cents_gross": "", "fee_cents": "", "pnl_cents_net": "", "pnl_cents": "",
         })
 
     def _try_resolve(self) -> None:
@@ -100,7 +103,8 @@ class ShadowWorker:
                     product=fill.product,
                     expiry_time=fill.expiry_time,
                 )
-                won, pnl_cents = pnl_for_trade(fill.side, fill.price, yes_outcome)
+                pnl = calculate_trade_pnl(fill.side, fill.price, yes_outcome, contract_count=1)
+                won = bool(pnl["pnl_cents_net"] > 0)
                 self._resolved_n += 1
                 if won:
                     self._resolved_wins += 1
@@ -109,7 +113,12 @@ class ShadowWorker:
                     "ticker": fill.ticker, "side": fill.side, "price": fill.price,
                     "expiry_time": fill.expiry_time.isoformat(), "product": fill.product,
                     "status": "shadow_win" if won else "shadow_loss",
-                    "yes_outcome": yes_outcome, "won": str(won), "pnl_cents": pnl_cents,
+                    "yes_outcome": yes_outcome,
+                    "won": str(won),
+                    "pnl_cents_gross": pnl["pnl_cents_gross"],
+                    "fee_cents": pnl["fee_cents"],
+                    "pnl_cents_net": pnl["pnl_cents_net"],
+                    "pnl_cents": pnl["pnl_cents_net"],
                 })
                 logging.info(
                     "shadow: resolved %s won=%s n=%d/%d",
