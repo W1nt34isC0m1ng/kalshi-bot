@@ -32,6 +32,13 @@ class TradeJournal:
         "spread_cents",
         "score",
         "reason",
+        "status",
+        "status_reason",
+        "order_id",
+        "filled_count",
+        "requested_count",
+        "premium_cents_per_contract",
+        "notional_cents",
         "spot",
         "strike",
         "sigma",
@@ -40,13 +47,6 @@ class TradeJournal:
         "fair",
         "raw_edge",
         "momentum_boost",
-        "status",
-        "status_reason",
-        "order_id",
-        "filled_count",
-        "requested_count",
-        "premium_cents_per_contract",
-        "notional_cents",
     ]
 
     def __init__(self, filepath: str = "logs/trade_journal.csv"):
