@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
+from src.kalshi_bot.assets import ASSET_CONFIG, asset_prefix_from_ticker
+
 
 JOURNAL_PATH = "logs/trade_journal.csv"
 OUTPUT_PATH = "logs/trade_backtest_results.csv"
@@ -25,11 +27,8 @@ OUTPUT_PATH = "logs/trade_backtest_results.csv"
 KALSHI_BINARY_FEE_RATE_DOLLARS = Decimal("0.07")
 
 COINBASE_PRODUCTS = {
-    "KXBTC15M": "BTC-USD",
-    "KXETH15M": "ETH-USD",
-    "KXSOL15M": "SOL-USD",
-    "KXDOGE15M": "DOGE-USD",
-    "KXXRP15M": "XRP-USD",
+    series: config["product"]
+    for series, config in ASSET_CONFIG.items()
 }
 
 # Compiled regex for the Kalshi ticker format: KXBTC15M-26APR111700-00
@@ -39,14 +38,6 @@ _TICKER_RE = re.compile(
     r"^([A-Z][A-Z0-9]+)-(\d{2}[A-Z]{3}\d{6})-(\d+)$",
     re.IGNORECASE,
 )
-
-
-def asset_prefix_from_ticker(ticker: str) -> str | None:
-    t = (ticker or "").upper()
-    for prefix in COINBASE_PRODUCTS:
-        if t.startswith(prefix):
-            return prefix
-    return None
 
 
 _MONTH_MAP = {

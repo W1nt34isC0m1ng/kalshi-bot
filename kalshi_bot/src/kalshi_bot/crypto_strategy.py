@@ -8,14 +8,10 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from .assets import ASSET_CONFIG, asset_prefix_from_ticker
 from .client import KalshiHttpClient
 from .models import Market, Signal
 
-
-ASSET_CONFIG = {
-    "KXBTC15M": {"product": "BTC-USD", "vol_mult": 1.00},
-    "KXETH15M": {"product": "ETH-USD", "vol_mult": 1.10},
-}
 
 # Coinbase API cache TTLs
 _SPOT_CACHE_TTL = 20.0     # current spot: 20s
@@ -25,14 +21,6 @@ _VOL_CACHE_TTL = 60.0      # rolling vol: recompute once per minute
 
 def norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-
-def asset_prefix_from_ticker(ticker: str) -> str | None:
-    t = (ticker or "").upper()
-    for prefix in ASSET_CONFIG:
-        if t.startswith(prefix):
-            return prefix
-    return None
 
 
 # ------------------------------------------------------------------ #
@@ -306,9 +294,6 @@ class CryptoProbStrategy:
     def evaluate(self, market: Market) -> Signal | None:
         prefix = asset_prefix_from_ticker(market.ticker)
         if prefix is None:
-            return None
-
-        if not market.ticker.startswith(("KXBTC15M", "KXETH15M")):
             return None
 
         cfg = ASSET_CONFIG[prefix]
