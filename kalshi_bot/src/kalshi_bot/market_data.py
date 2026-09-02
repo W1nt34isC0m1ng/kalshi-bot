@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable
 
+from .assets import DEFAULT_CRYPTO_15M_SERIES, crypto_15m_series_from_env
 from .client import KalshiHttpClient
 from .models import Market
 
@@ -11,17 +12,24 @@ from .models import Market
 _TARGET_RE = re.compile(r'\$([\d,]+\.?\d*)\s*target', re.IGNORECASE)
 
 
-CRYPTO_15M_SERIES = [
-    "KXBTC15M",
-    # KXETH15M excluded: markets are frequently illiquid (bid=0/ask=0) and
-    # insufficient trade history to validate the vol_mult calibration.
-]
+CRYPTO_15M_SERIES = list(DEFAULT_CRYPTO_15M_SERIES)
 
 
 class MarketDataService:
-    def __init__(self, client: KalshiHttpClient, markets_per_event: int = 2):
+    def __init__(
+        self,
+        client: KalshiHttpClient,
+        markets_per_event: int = 2,
+        series_tickers: Iterable[str] | None = None,
+    ):
         self.client = client
         self.markets_per_event = markets_per_event
+        self.series_tickers = (
+            list(series_tickers)
+            if series_tickers is not None
+            else crypto_15m_series_from_env()
+        )
+        print(f"[market_data] crypto_15m_series={','.join(self.series_tickers) or 'NONE'}")
 
     def _parse_dt(self, value: str | None):
         if not value:
@@ -49,7 +57,7 @@ class MarketDataService:
 
         return None
 
-    def _pick_nearest_event(self, series: str) -> tuple[str, float] | None:
+    def _pick_nearest_event(self, series: str) -> tuple[str, float, float | None] | None:
         try:
             page = self.client.get_events(
                 series_ticker=series,
@@ -117,7 +125,7 @@ class MarketDataService:
         kept = 0
         skipped = 0
 
-        for series in CRYPTO_15M_SERIES:
+        for series in self.series_tickers:
             picked = self._pick_nearest_event(series)
             if not picked:
                 continue
