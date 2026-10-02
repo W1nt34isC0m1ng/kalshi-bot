@@ -22,6 +22,7 @@ class TradeJournal:
 
     _FIELDNAMES = [
         "ts_utc",
+        "exchange",
         "strategy",
         "ticker",
         "side",
@@ -47,6 +48,10 @@ class TradeJournal:
         "fair",
         "raw_edge",
         "momentum_boost",
+        "market_slug",
+        "fee_rate",
+        "fee_liquidity_role",
+        "resolution_source",
     ]
 
     def __init__(self, filepath: str = "logs/trade_journal.csv"):
@@ -146,6 +151,7 @@ class TradeJournal:
 
         row = {
             "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "exchange": signal.exchange,
             "strategy": signal.strategy,
             "ticker": signal.ticker,
             "side": signal.side,
@@ -164,6 +170,10 @@ class TradeJournal:
             "fair": _csv_value(signal.fair),
             "raw_edge": _csv_value(signal.raw_edge),
             "momentum_boost": signal.momentum_boost,
+            "market_slug": _csv_value(signal.market_slug),
+            "fee_rate": _csv_value(signal.fee_rate),
+            "fee_liquidity_role": _csv_value(signal.fee_liquidity_role),
+            "resolution_source": _csv_value(signal.resolution_source),
             "status": status,
             "status_reason": status_reason,
             "order_id": order_id,

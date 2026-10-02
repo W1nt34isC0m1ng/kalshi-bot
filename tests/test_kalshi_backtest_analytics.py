@@ -7,7 +7,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kalshi_bot"))
 
-from backtest import calculate_trade_pnl, regime_labels_for_trade
+from backtest import (
+    calculate_trade_pnl,
+    extract_polymarket_yes_outcome,
+    regime_labels_for_trade,
+)
 
 
 def test_calculate_trade_pnl_subtracts_estimated_kalshi_fees_for_yes_win():
@@ -36,6 +40,54 @@ def test_calculate_trade_pnl_subtracts_estimated_kalshi_fees_for_no_loss():
     assert pnl["pnl_cents_gross"] == -90
     assert pnl["fee_cents"] == 5
     assert pnl["pnl_cents_net"] == -95
+
+
+def test_calculate_trade_pnl_uses_polymarket_crypto_taker_fee_rate():
+    pnl = calculate_trade_pnl(
+        side="yes",
+        yes_price_cents=50,
+        yes_outcome=1,
+        contract_count=100,
+        exchange="polymarket",
+        fee_rate=0.07,
+        liquidity_role="taker",
+    )
+
+    assert pnl["won"] is True
+    assert pnl["pnl_cents_gross"] == 5000
+    assert pnl["fee_cents"] == 175.0
+    assert pnl["pnl_cents_net"] == 4825.0
+
+
+def test_calculate_trade_pnl_uses_zero_polymarket_fee_for_post_only_maker_fill():
+    pnl = calculate_trade_pnl(
+        side="yes",
+        yes_price_cents=50,
+        yes_outcome=1,
+        contract_count=100,
+        exchange="polymarket",
+        fee_rate=0.07,
+        liquidity_role="maker",
+    )
+
+    assert pnl["fee_cents"] == 0.0
+    assert pnl["pnl_cents_net"] == 5000.0
+
+
+def test_extract_polymarket_yes_outcome_uses_closed_outcome_prices():
+    yes_market = {
+        "closed": True,
+        "outcomes": '["Up", "Down"]',
+        "outcomePrices": '["1", "0"]',
+    }
+    no_market = {
+        "closed": True,
+        "outcomes": '["Up", "Down"]',
+        "outcomePrices": '["0.001", "0.999"]',
+    }
+
+    assert extract_polymarket_yes_outcome(yes_market) == 1
+    assert extract_polymarket_yes_outcome(no_market) == 0
 
 
 def test_regime_labels_parse_reason_and_timestamp_fields():

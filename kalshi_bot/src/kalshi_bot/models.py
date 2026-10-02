@@ -40,6 +40,16 @@ class Market:
     # Use this as the strike instead of re-deriving from Coinbase candles.
     kalshi_strike: float | None = None
     series_ticker: str | None = None
+    exchange: str = "kalshi"
+    polymarket_slug: str | None = None
+    polymarket_condition_id: str | None = None
+    polymarket_yes_token_id: str | None = None
+    polymarket_no_token_id: str | None = None
+    polymarket_fee_rate: float | None = None
+    polymarket_fee_liquidity_role: str = "maker"
+    resolution_source: str | None = None
+    tick_size: str | None = None
+    neg_risk: bool | None = None
 
     @classmethod
     def from_api(cls, row: dict) -> "Market":
@@ -74,6 +84,7 @@ class Market:
             event_ticker=row.get("event_ticker"),
             secs_left=None,
             series_ticker=row.get("series_ticker"),
+            exchange="kalshi",
         )
 
 
@@ -100,6 +111,11 @@ class Signal:
     yes_bid: int | None = None
     yes_ask: int | None = None
     strategy: str = "generic"
+    exchange: str = "kalshi"
+    market_slug: str | None = None
+    fee_rate: float | None = None
+    fee_liquidity_role: str = "maker"
+    resolution_source: str | None = None
 
 
 @dataclass

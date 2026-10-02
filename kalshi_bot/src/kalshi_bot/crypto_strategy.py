@@ -10,6 +10,7 @@ import requests
 
 from .assets import ASSET_CONFIG, asset_prefix_from_ticker
 from .client import KalshiHttpClient
+from .fees import estimate_exchange_fee_cents
 from .models import Market, Signal
 
 
@@ -424,13 +425,26 @@ class CryptoProbStrategy:
         confidence = min(1.0, confidence + momentum_boost)
 
         premium_cents = market_price if side == "yes" else (100.0 - market_price)
-        ev_cents = abs(raw_edge)
+        ev_cents_gross = abs(raw_edge)
+        fee_cents = 0.0
+        if market.exchange == "polymarket":
+            fee_cents = float(
+                estimate_exchange_fee_cents(
+                    "polymarket",
+                    side,
+                    int(round(market_price)),
+                    contract_count=1,
+                    fee_rate=market.polymarket_fee_rate,
+                    liquidity_role=market.polymarket_fee_liquidity_role,
+                )
+            )
+        ev_cents = ev_cents_gross - fee_cents
         ev_roi = ev_cents / max(premium_cents, 1e-9)
 
         # spread_penalty: 0.15¢ per cent of spread, accounts for the cost
         # of getting lifted / adverse fill at expiry.
         spread_penalty = spread * 0.15
-        adjusted_edge = (abs(raw_edge) * confidence) - spread_penalty
+        adjusted_edge = (ev_cents_gross * confidence) - spread_penalty - fee_cents
 
         if adjusted_edge < self.min_score:
             logging.debug(
@@ -443,9 +457,9 @@ class CryptoProbStrategy:
 
         logging.info(
             "strategy: KEEP %s side=%s spot=%.2f strike=%.2f market=%.1f fair=%.1f "
-            "raw_edge=%.1f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f",
+            "raw_edge=%.1f fee=%.2f d2=%.2f conf=%.2f momentum_boost=%.2f score=%.2f sigma=%.2f secs_left=%.0f",
             market.ticker, side, spot_now, strike_price, market_price, fair_cents,
-            raw_edge, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left,
+            raw_edge, fee_cents, d2, confidence - momentum_boost, momentum_boost, adjusted_edge, sigma, secs_left,
         )
 
         return Signal(
@@ -461,7 +475,8 @@ class CryptoProbStrategy:
             reason=(
                 f"asset={prefix}, spot={spot_now:.2f}, strike={strike_price:.2f}, "
                 f"secs_left={secs_left:.0f}, sigma={sigma:.2f}, d2={d2:.2f}, "
-                f"fair={fair_cents:.1f}, market={market_price:.1f}, ev={ev_cents:.1f}, "
+                f"fair={fair_cents:.1f}, market={market_price:.1f}, fee={fee_cents:.2f}, "
+                f"ev_gross={ev_cents_gross:.1f}, ev={ev_cents:.1f}, "
                 f"ev_roi={ev_roi:.4f}, conf={confidence - momentum_boost:.2f}, "
                 f"momentum_boost={momentum_boost:.2f}"
             ),
@@ -476,4 +491,9 @@ class CryptoProbStrategy:
             yes_bid=market.yes_bid,
             yes_ask=market.yes_ask,
             strategy="crypto_prob",
+            exchange=market.exchange,
+            market_slug=market.polymarket_slug,
+            fee_rate=market.polymarket_fee_rate,
+            fee_liquidity_role=market.polymarket_fee_liquidity_role,
+            resolution_source=market.resolution_source,
         )
