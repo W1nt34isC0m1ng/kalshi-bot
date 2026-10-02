@@ -11,6 +11,7 @@ from kalshi_bot.journal import TradeJournal
 def test_journal_structured_signal_fields_are_appended_to_existing_schema():
     original_fields = [
         "ts_utc",
+        "exchange",
         "strategy",
         "ticker",
         "side",
@@ -38,6 +39,9 @@ def test_journal_structured_signal_fields_are_appended_to_existing_schema():
         "fair",
         "raw_edge",
         "momentum_boost",
+        "market_slug",
+        "fee_rate",
+        "resolution_source",
     ]
 
     assert TradeJournal._FIELDNAMES[: len(original_fields)] == original_fields

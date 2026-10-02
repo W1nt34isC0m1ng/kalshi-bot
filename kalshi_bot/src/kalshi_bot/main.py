@@ -17,6 +17,7 @@ from .executor import ExecutionEngine
 from .journal import TradeJournal
 from .market_data import MarketDataService
 from .models import Market
+from .polymarket import PolymarketHttpClient, PolymarketMarketDataService
 from .risk import RiskManager
 from .crypto_strategy import CryptoProbStrategy
 from .ws import KalshiWebSocket
@@ -26,6 +27,21 @@ console = Console()
 
 
 def build_clients(settings: Settings):
+    if settings.exchange == "polymarket":
+        public_client = PolymarketHttpClient(
+            gamma_base_url=settings.polymarket_gamma_base_url,
+            clob_base_url=settings.polymarket_clob_base_url,
+            chain_id=settings.polymarket_chain_id,
+            private_key=settings.polymarket_private_key,
+            api_key=settings.polymarket_api_key,
+            api_secret=settings.polymarket_api_secret,
+            api_passphrase=settings.polymarket_api_passphrase,
+            signature_type=settings.polymarket_signature_type,
+            funder=settings.polymarket_funder,
+        )
+        private_client = public_client if settings.polymarket_private_key else None
+        return public_client, private_client, None
+
     public_client = KalshiHttpClient(settings.base_url)
     signer = None
     private_client = None
@@ -322,7 +338,14 @@ def main() -> None:
     public_client, private_client, signer = build_clients(settings)
 
     api_client = private_client or public_client
-    market_data = MarketDataService(api_client, markets_per_event=settings.markets_per_event)
+    if settings.exchange == "polymarket":
+        market_data = PolymarketMarketDataService(
+            api_client,
+            assets=settings.polymarket_assets,
+            timeframe=settings.polymarket_timeframe,
+        )
+    else:
+        market_data = MarketDataService(api_client, markets_per_event=settings.markets_per_event)
     risk = RiskManager(settings)
     executor = ExecutionEngine(api_client, settings, risk)
     strategy = CryptoProbStrategy(
@@ -332,10 +355,10 @@ def main() -> None:
         min_score=settings.crypto_min_score,
         momentum_scaling_factor=settings.momentum_scaling_factor,
     )
-    golf_strategy = build_golf_strategy(api_client, settings)
+    golf_strategy = build_golf_strategy(api_client, settings) if settings.exchange == "kalshi" else None
     journal = TradeJournal(settings.trade_journal_path)
 
-    if private_client:
+    if private_client and settings.exchange == "kalshi":
         _reconcile_positions(private_client, risk)
 
     ws_market_cache: dict[str, dict] = {}
@@ -356,6 +379,7 @@ def main() -> None:
     while not shutdown_event.is_set():
         if (
             private_client
+            and settings.exchange == "kalshi"
             and not settings.dry_run
             and (time.monotonic() - last_position_reconcile) >= settings.position_reconcile_interval_seconds
         ):
@@ -366,7 +390,7 @@ def main() -> None:
         markets = list(market_data.iter_open_markets(limit_per_page=200))
 
         market_tickers_this_loop = [market.ticker for market in markets]
-        if signer and not ws_started and market_tickers_this_loop:
+        if settings.exchange == "kalshi" and signer and not ws_started and market_tickers_this_loop:
             active_tickers.extend(
                 ticker for ticker in market_tickers_this_loop if ticker not in active_tickers
             )

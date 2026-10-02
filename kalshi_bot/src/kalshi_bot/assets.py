@@ -42,6 +42,26 @@ ASSET_CONFIG = {
             "Exchange candle support is available for tokenized gold PAXG-USD."
         ),
     },
+    "PMBTC15M": {
+        "product": "BTC-USD",
+        "vol_mult": 1.00,
+        "notes": "Polymarket BTC Up or Down 15m; resolves from Chainlink crypto streams.",
+    },
+    "PMETH15M": {
+        "product": "ETH-USD",
+        "vol_mult": 1.10,
+        "notes": "Polymarket ETH Up or Down 15m; resolves from Chainlink crypto streams.",
+    },
+    "PMSOL15M": {
+        "product": "SOL-USD",
+        "vol_mult": 1.00,
+        "notes": "Polymarket SOL Up or Down 15m; resolves from Chainlink crypto streams.",
+    },
+    "PMXRP15M": {
+        "product": "XRP-USD",
+        "vol_mult": 1.00,
+        "notes": "Polymarket XRP Up or Down 15m; resolves from Chainlink crypto streams.",
+    },
 }
 
 BLOCKED_CRYPTO_15M_SERIES = {

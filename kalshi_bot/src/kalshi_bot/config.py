@@ -15,8 +15,20 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
+def _optional_int(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logging.warning("%s must be an integer; ignoring", name)
+        return None
+
+
 @dataclass
 class Settings:
+    exchange: str = os.getenv("EXCHANGE", "kalshi").lower()
     env: str = os.getenv("KALSHI_ENV", "demo")
     api_key_id: str = os.getenv("KALSHI_API_KEY_ID", "")
     # No hardcoded path — must be set via KALSHI_PRIVATE_KEY_PATH in .env
@@ -98,10 +110,35 @@ class Settings:
     golf_outright_min_ratio: float = float(os.getenv("GOLF_OUTRIGHT_MIN_RATIO", "1.8"))
     golf_top10_min_ratio: float = float(os.getenv("GOLF_TOP10_MIN_RATIO", "0"))
     golf_make_cut_min_ratio: float = float(os.getenv("GOLF_MAKE_CUT_MIN_RATIO", "0"))
+    # Polymarket public read endpoints and optional live-trading credentials.
+    polymarket_gamma_base_url: str = os.getenv(
+        "POLYMARKET_GAMMA_BASE_URL",
+        "https://gamma-api.polymarket.com",
+    )
+    polymarket_clob_base_url: str = os.getenv(
+        "POLYMARKET_CLOB_BASE_URL",
+        "https://clob.polymarket.com",
+    )
+    polymarket_assets: list[str] | None = None
+    polymarket_timeframe: str = os.getenv("POLYMARKET_TIMEFRAME", "15m").lower()
+    polymarket_chain_id: int = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))
+    polymarket_private_key: str = os.getenv("POLYMARKET_PRIVATE_KEY", "")
+    polymarket_api_key: str = os.getenv("POLYMARKET_API_KEY", "")
+    polymarket_api_secret: str = os.getenv("POLYMARKET_API_SECRET", "")
+    polymarket_api_passphrase: str = os.getenv("POLYMARKET_API_PASSPHRASE", "")
+    polymarket_signature_type: int | None = None
+    polymarket_funder: str = os.getenv("POLYMARKET_FUNDER", "")
 
     def __post_init__(self) -> None:
+        if self.exchange not in {"kalshi", "polymarket"}:
+            logging.warning("Unknown EXCHANGE=%s; defaulting to kalshi", self.exchange)
+            self.exchange = "kalshi"
+
         if self.category_filter is None:
             self.category_filter = _csv("CATEGORY_FILTER", "Crypto")
+        if self.polymarket_assets is None:
+            self.polymarket_assets = [asset.lower() for asset in _csv("POLYMARKET_ASSETS", "btc")]
+        self.polymarket_signature_type = _optional_int("POLYMARKET_SIGNATURE_TYPE")
         if self.golf_enabled_market_types is None:
             self.golf_enabled_market_types = _csv("GOLF_ENABLED_MARKET_TYPES", "outright")
         if self.golf_outright_series is None:
@@ -111,10 +148,14 @@ class Settings:
         if self.golf_make_cut_series is None:
             self.golf_make_cut_series = _csv("GOLF_MAKE_CUT_SERIES", "KXPGAMAKECUT,KXMASTERSCUT")
 
-        if not self.api_key_id or not self.private_key_path:
+        if self.exchange == "kalshi" and (not self.api_key_id or not self.private_key_path):
             logging.warning(
                 "KALSHI_API_KEY_ID or KALSHI_PRIVATE_KEY_PATH not set — "
                 "running without authenticated client (dry_run only)"
+            )
+        if self.exchange == "polymarket" and not self.dry_run and not self.polymarket_private_key:
+            logging.warning(
+                "POLYMARKET_PRIVATE_KEY is not set — live Polymarket orders will fail"
             )
 
         if self.live_side_mode not in {"both", "yes_only"}:

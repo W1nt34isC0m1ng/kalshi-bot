@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -11,7 +11,12 @@ import pandas as pd
 import requests
 
 from src.kalshi_bot.assets import ASSET_CONFIG, asset_prefix_from_ticker
-
+from src.kalshi_bot.fees import (
+    POLYMARKET_CRYPTO_TAKER_FEE_RATE,
+    estimate_exchange_fee_cents,
+    estimate_kalshi_fee_cents,
+    premium_cents_for_side,
+)
 
 JOURNAL_PATH = "logs/trade_journal.csv"
 OUTPUT_PATH = "logs/trade_backtest_results.csv"
@@ -24,7 +29,6 @@ OUTPUT_PATH = "logs/trade_backtest_results.csv"
 #   fee = ceil($0.07 * contracts * price * (1 - price) to whole cents)
 # where price is the bought contract premium in dollars. The estimate is
 # charged once on entry and subtracted from realized gross P&L.
-KALSHI_BINARY_FEE_RATE_DOLLARS = Decimal("0.07")
 
 COINBASE_PRODUCTS = {
     series: config["product"]
@@ -38,6 +42,7 @@ _TICKER_RE = re.compile(
     r"^([A-Z][A-Z0-9]+)-(\d{2}[A-Z]{3}\d{6})-(\d+)$",
     re.IGNORECASE,
 )
+_POLYMARKET_TICKER_RE = re.compile(r"^(PM[A-Z]+15M)-(\d+)$", re.IGNORECASE)
 
 
 _MONTH_MAP = {
@@ -85,6 +90,28 @@ def parse_market_ticker(ticker: str) -> tuple[str, datetime, str]:
     expiry_local = datetime(2000 + yy, month, day, hour, minute, 0, tzinfo=_MARKET_TICKER_TZ)
     expiry_utc = expiry_local.astimezone(timezone.utc)
     return prefix, expiry_utc, suffix
+
+
+def parse_polymarket_ticker(ticker: str) -> tuple[str, datetime, str]:
+    """Parse a Polymarket synthetic ticker like PMBTC15M-1790973900."""
+    m = _POLYMARKET_TICKER_RE.match((ticker or "").strip().upper())
+    if not m:
+        raise ValueError(f"Unrecognized Polymarket ticker format: {ticker!r}")
+
+    prefix = m.group(1)
+    start_ts = int(m.group(2))
+    expiry_utc = datetime.fromtimestamp(start_ts + 900, tz=timezone.utc)
+    return prefix, expiry_utc, str(start_ts)
+
+
+def infer_exchange_from_row(row: Any) -> str:
+    exchange = str(_row_value(row, "exchange", "") or "").lower()
+    if exchange in {"kalshi", "polymarket"}:
+        return exchange
+    ticker = str(_row_value(row, "ticker", "") or "").upper()
+    if ticker.startswith("PM"):
+        return "polymarket"
+    return "kalshi"
 
 
 def get_precision_for_product(product: str) -> int:
@@ -138,41 +165,14 @@ def _row_value(row: Any, key: str, default: Any = None) -> Any:
     return default if _is_missing(value) else value
 
 
-def premium_cents_for_side(side: str, yes_price_cents: int) -> int:
-    """Return the bought contract premium in cents for a YES-equivalent price."""
-    normalized = (side or "").lower()
-    if normalized == "yes":
-        return yes_price_cents
-    if normalized == "no":
-        return 100 - yes_price_cents
-    raise ValueError(f"Unknown binary side: {side!r}")
-
-
-def estimate_kalshi_fee_cents(side: str, yes_price_cents: int, contract_count: int = 1) -> int:
-    """Estimate Kalshi binary-contract fees in cents for a dry-run order."""
-    if contract_count <= 0:
-        return 0
-
-    premium_cents = premium_cents_for_side(side, yes_price_cents)
-    if premium_cents <= 0 or premium_cents >= 100:
-        return 0
-
-    premium_dollars = Decimal(premium_cents) / Decimal(100)
-    fee_dollars = (
-        KALSHI_BINARY_FEE_RATE_DOLLARS
-        * Decimal(contract_count)
-        * premium_dollars
-        * (Decimal(1) - premium_dollars)
-    )
-    return int((fee_dollars * Decimal(100)).to_integral_value(rounding=ROUND_CEILING))
-
-
 def calculate_trade_pnl(
     side: str,
     yes_price_cents: int,
     yes_outcome: int,
     contract_count: int = 1,
-) -> dict[str, int | bool]:
+    exchange: str = "kalshi",
+    fee_rate: float | None = None,
+) -> dict[str, int | float | bool]:
     """Compute gross and after-fee P&L for a binary dry-run trade."""
     normalized_side = (side or "").lower()
     won = (yes_outcome == 1 and normalized_side == "yes") or (
@@ -181,7 +181,13 @@ def calculate_trade_pnl(
     premium_cents = premium_cents_for_side(normalized_side, yes_price_cents)
     payout_cents = 100 if won else 0
     pnl_cents_gross = (payout_cents - premium_cents) * max(contract_count, 0)
-    fee_cents = estimate_kalshi_fee_cents(normalized_side, yes_price_cents, contract_count)
+    fee_cents = estimate_exchange_fee_cents(
+        exchange,
+        normalized_side,
+        yes_price_cents,
+        contract_count,
+        fee_rate=fee_rate,
+    )
 
     return {
         "won": won,
@@ -383,6 +389,77 @@ def resolve_yes_outcome(ticker: str, product: str, expiry_time: datetime):
     return target, expiry_spot, yes_outcome
 
 
+def _json_array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def extract_polymarket_yes_outcome(market: dict[str, Any]) -> int | None:
+    """Return 1 when Up/YES resolved, 0 when Down/NO resolved, else None."""
+    if not market.get("closed"):
+        return None
+
+    outcomes = [str(outcome).lower() for outcome in _json_array(market.get("outcomes"))]
+    prices = [_optional_float(price) for price in _json_array(market.get("outcomePrices"))]
+    if not outcomes or len(outcomes) != len(prices):
+        return None
+
+    winning_indices = [
+        idx for idx, price in enumerate(prices)
+        if price is not None and price >= 0.95
+    ]
+    if not winning_indices:
+        return None
+
+    winner = outcomes[winning_indices[0]]
+    if winner in {"up", "yes"}:
+        return 1
+    if winner in {"down", "no"}:
+        return 0
+    return None
+
+
+def polymarket_slug_from_row(row: Any) -> str:
+    slug = str(_row_value(row, "market_slug", "") or "")
+    if slug:
+        return slug
+
+    ticker = str(_row_value(row, "ticker", "") or "").upper()
+    prefix, _, start_ts = parse_polymarket_ticker(ticker)
+    asset = prefix.removeprefix("PM").removesuffix("15M").lower()
+    return f"{asset}-updown-15m-{start_ts}"
+
+
+def fetch_polymarket_market_by_slug(slug: str) -> dict[str, Any]:
+    url = f"https://gamma-api.polymarket.com/markets/slug/{slug}"
+    resp = requests.get(url, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, list):
+        if not data:
+            raise ValueError(f"No Polymarket market found for slug {slug}")
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    raise ValueError(f"Unexpected Polymarket market response for {slug}: {data!r}")
+
+
+def resolve_polymarket_yes_outcome(row: Any) -> tuple[str, int]:
+    slug = polymarket_slug_from_row(row)
+    market = fetch_polymarket_market_by_slug(slug)
+    yes_outcome = extract_polymarket_yes_outcome(market)
+    if yes_outcome is None:
+        raise ValueError(f"Polymarket market {slug} is not resolved yet")
+    return slug, yes_outcome
+
+
 def pnl_for_trade(side: str, price: int, yes_outcome: int):
     """Compute gross P&L for a single-contract trade.
 
@@ -407,9 +484,14 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
         ticker = str(row["ticker"])
         prefix = asset_prefix_from_ticker(ticker)
         contract_count = contract_count_from_row(row)
+        exchange = infer_exchange_from_row(row)
+        fee_rate = _optional_float(_row_value(row, "fee_rate"))
+        if exchange == "polymarket" and fee_rate is None:
+            fee_rate = float(POLYMARKET_CRYPTO_TAKER_FEE_RATE)
 
         base = {
             "ts_utc": row["ts_utc"],
+            "exchange": exchange,
             "ticker": ticker,
             "side": row["side"],
             "price": int(row["price"]),
@@ -427,6 +509,9 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
             "fair": _row_value(row, "fair", ""),
             "raw_edge": _row_value(row, "raw_edge", ""),
             "momentum_boost": _row_value(row, "momentum_boost", ""),
+            "market_slug": _row_value(row, "market_slug", ""),
+            "fee_rate": "" if fee_rate is None else fee_rate,
+            "resolution_source": _row_value(row, "resolution_source", ""),
         }
         base.update(regime_labels_for_trade(row))
 
@@ -437,7 +522,10 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
         product = COINBASE_PRODUCTS[prefix]
 
         try:
-            _, expiry_time, _ = parse_market_ticker(ticker)
+            if exchange == "polymarket":
+                _, expiry_time, _ = parse_polymarket_ticker(ticker)
+            else:
+                _, expiry_time, _ = parse_market_ticker(ticker)
         except Exception as e:
             results.append({**base, "status_bt": "error", "error": f"parse error: {e}"})
             continue
@@ -451,25 +539,38 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
             continue
 
         try:
-            strike, spot_at_expiry, yes_outcome = resolve_yes_outcome(
-                ticker=ticker,
-                product=product,
-                expiry_time=expiry_time,
-            )
+            if exchange == "polymarket":
+                slug, yes_outcome = resolve_polymarket_yes_outcome(row)
+                strike = _row_value(row, "strike", "")
+                spot_at_expiry = ""
+            else:
+                slug = ""
+                strike, spot_at_expiry, yes_outcome = resolve_yes_outcome(
+                    ticker=ticker,
+                    product=product,
+                    expiry_time=expiry_time,
+                )
             pnl = calculate_trade_pnl(
                 side=str(row["side"]),
                 yes_price_cents=int(row["price"]),
                 yes_outcome=yes_outcome,
                 contract_count=contract_count,
+                exchange=exchange,
+                fee_rate=fee_rate,
             )
-            ev_cents_gross = float(base["ev_cents"]) * contract_count
-            ev_cents_net = ev_cents_gross - int(pnl["fee_cents"])
+            if exchange == "polymarket":
+                ev_cents_net = float(base["ev_cents"]) * contract_count
+                ev_cents_gross = ev_cents_net + float(pnl["fee_cents"])
+            else:
+                ev_cents_gross = float(base["ev_cents"]) * contract_count
+                ev_cents_net = ev_cents_gross - float(pnl["fee_cents"])
 
             results.append({
                 **base,
                 "status_bt": "resolved",
                 "product": product,
                 "expiry_time": expiry_time.isoformat(),
+                "market_slug": slug or base.get("market_slug", ""),
                 "strike": strike,
                 "spot_at_expiry": spot_at_expiry,
                 "yes_outcome": yes_outcome,

@@ -8,3 +8,4 @@ rich>=13.7.0
 scipy>=1.7.0
 pandas>=3.0.5
 pytest>=7.0
+py-clob-client-v2>=1.1.0
