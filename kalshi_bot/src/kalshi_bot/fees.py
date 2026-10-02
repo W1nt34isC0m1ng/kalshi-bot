@@ -45,8 +45,8 @@ def estimate_polymarket_taker_fee_cents(
 
     Polymarket documents fees as:
         fee = contracts * feeRate * p * (1 - p)
-    rounded to 5 decimal places in USDC. Makers are not charged; this bot uses
-    the taker formula as a conservative after-fee estimate for dry-run fills.
+    rounded to 5 decimal places in USDC. Makers are not charged; this helper is
+    used when a caller explicitly models taker fills.
     """
     if contract_count <= 0:
         return 0.0

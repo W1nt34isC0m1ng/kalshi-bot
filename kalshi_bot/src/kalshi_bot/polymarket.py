@@ -232,7 +232,7 @@ class PolymarketMarketDataService:
 
     @staticmethod
     def slug_for_window(asset: str, timeframe: str = "15m", now_ts: int | None = None) -> str:
-        durations = {"15m": 900, "5m": 300}
+        durations = {"15m": 900}
         if timeframe not in durations:
             raise ValueError(f"Unsupported Polymarket up/down timeframe: {timeframe}")
         ts = int(time.time() if now_ts is None else now_ts)
