@@ -172,6 +172,7 @@ def calculate_trade_pnl(
     contract_count: int = 1,
     exchange: str = "kalshi",
     fee_rate: float | None = None,
+    liquidity_role: str = "maker",
 ) -> dict[str, int | float | bool]:
     """Compute gross and after-fee P&L for a binary dry-run trade."""
     normalized_side = (side or "").lower()
@@ -187,6 +188,7 @@ def calculate_trade_pnl(
         yes_price_cents,
         contract_count,
         fee_rate=fee_rate,
+        liquidity_role=liquidity_role,
     )
 
     return {
@@ -488,6 +490,9 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
         fee_rate = _optional_float(_row_value(row, "fee_rate"))
         if exchange == "polymarket" and fee_rate is None:
             fee_rate = float(POLYMARKET_CRYPTO_TAKER_FEE_RATE)
+        liquidity_role = str(_row_value(row, "fee_liquidity_role", "") or "").lower()
+        if liquidity_role not in {"maker", "taker"}:
+            liquidity_role = "maker" if exchange == "polymarket" else "taker"
 
         base = {
             "ts_utc": row["ts_utc"],
@@ -511,6 +516,7 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
             "momentum_boost": _row_value(row, "momentum_boost", ""),
             "market_slug": _row_value(row, "market_slug", ""),
             "fee_rate": "" if fee_rate is None else fee_rate,
+            "fee_liquidity_role": liquidity_role,
             "resolution_source": _row_value(row, "resolution_source", ""),
         }
         base.update(regime_labels_for_trade(row))
@@ -557,6 +563,7 @@ def backtest_journal(journal_path: str) -> pd.DataFrame:
                 contract_count=contract_count,
                 exchange=exchange,
                 fee_rate=fee_rate,
+                liquidity_role=liquidity_role,
             )
             if exchange == "polymarket":
                 ev_cents_net = float(base["ev_cents"]) * contract_count

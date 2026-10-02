@@ -435,6 +435,7 @@ class CryptoProbStrategy:
                     int(round(market_price)),
                     contract_count=1,
                     fee_rate=market.polymarket_fee_rate,
+                    liquidity_role=market.polymarket_fee_liquidity_role,
                 )
             )
         ev_cents = ev_cents_gross - fee_cents
@@ -493,5 +494,6 @@ class CryptoProbStrategy:
             exchange=market.exchange,
             market_slug=market.polymarket_slug,
             fee_rate=market.polymarket_fee_rate,
+            fee_liquidity_role=market.polymarket_fee_liquidity_role,
             resolution_source=market.resolution_source,
         )

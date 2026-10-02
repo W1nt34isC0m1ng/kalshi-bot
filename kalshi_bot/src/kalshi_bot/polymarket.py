@@ -188,12 +188,13 @@ class PolymarketHttpClient:
                 price=token_price,
                 size=count,
                 side=BUY,
+                expiration=expiration_ts or 0,
             ),
             options=PartialCreateOrderOptions(
                 tick_size=str(metadata.get("tick_size") or "0.01"),
                 neg_risk=bool(metadata.get("neg_risk") or False),
             ),
-            order_type=OrderType.GTC,
+            order_type=OrderType.GTD if expiration_ts else OrderType.GTC,
             post_only=post_only,
         )
         return {
@@ -218,11 +219,15 @@ class PolymarketMarketDataService:
         assets: Iterable[str] | None = None,
         timeframe: str = "15m",
         now_ts: int | None = None,
+        fee_liquidity_role: str = "maker",
     ):
+        if timeframe != "15m":
+            raise ValueError("Only 15m Polymarket Up/Down markets are supported")
         self.client = client
         self.assets = [asset.strip().lower() for asset in (assets or ["btc"]) if asset.strip()]
         self.timeframe = timeframe
         self.now_ts = now_ts
+        self.fee_liquidity_role = fee_liquidity_role
         print(f"[polymarket] assets={','.join(self.assets) or 'NONE'} timeframe={self.timeframe}")
 
     @staticmethod
@@ -266,8 +271,18 @@ class PolymarketMarketDataService:
 
         yes_token_id = token_ids[up_idx]
         no_token_id = token_ids[down_idx]
-        yes_book = self.client.get_orderbook(yes_token_id)
-        no_book = self.client.get_orderbook(no_token_id)
+        try:
+            yes_book = self.client.get_orderbook(yes_token_id)
+            no_book = self.client.get_orderbook(no_token_id)
+        except Exception as exc:
+            logging.warning(
+                "polymarket: %s orderbook_fetch_error yes_token=%s no_token=%s error=%s",
+                row.get("slug"),
+                yes_token_id,
+                no_token_id,
+                exc,
+            )
+            return None
 
         end_dt = _parse_dt(row.get("endDate") or event.get("endDate"))
         secs_left = None
@@ -311,6 +326,7 @@ class PolymarketMarketDataService:
             polymarket_yes_token_id=yes_token_id,
             polymarket_no_token_id=no_token_id,
             polymarket_fee_rate=float(fee_rate) if fee_rate is not None else None,
+            polymarket_fee_liquidity_role=self.fee_liquidity_role,
             resolution_source=row.get("resolutionSource"),
             tick_size=str(row.get("orderPriceMinTickSize") or yes_book.get("tick_size") or "0.01"),
             neg_risk=bool(row.get("negRisk") or yes_book.get("neg_risk") or False),

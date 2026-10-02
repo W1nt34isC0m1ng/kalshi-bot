@@ -50,12 +50,28 @@ def test_calculate_trade_pnl_uses_polymarket_crypto_taker_fee_rate():
         contract_count=100,
         exchange="polymarket",
         fee_rate=0.07,
+        liquidity_role="taker",
     )
 
     assert pnl["won"] is True
     assert pnl["pnl_cents_gross"] == 5000
     assert pnl["fee_cents"] == 175.0
     assert pnl["pnl_cents_net"] == 4825.0
+
+
+def test_calculate_trade_pnl_uses_zero_polymarket_fee_for_post_only_maker_fill():
+    pnl = calculate_trade_pnl(
+        side="yes",
+        yes_price_cents=50,
+        yes_outcome=1,
+        contract_count=100,
+        exchange="polymarket",
+        fee_rate=0.07,
+        liquidity_role="maker",
+    )
+
+    assert pnl["fee_cents"] == 0.0
+    assert pnl["pnl_cents_net"] == 5000.0
 
 
 def test_extract_polymarket_yes_outcome_uses_closed_outcome_prices():

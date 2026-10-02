@@ -29,3 +29,21 @@ def test_exchange_accepts_polymarket(monkeypatch):
     settings = config.Settings()
 
     assert settings.exchange == "polymarket"
+
+
+def test_polymarket_live_mode_fails_closed_without_reconciliation_opt_in(monkeypatch):
+    monkeypatch.setenv("EXCHANGE", "polymarket")
+    monkeypatch.setenv("DRY_RUN", "false")
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xabc")
+    monkeypatch.delenv("POLYMARKET_ALLOW_LIVE_WITHOUT_POSITION_RECONCILIATION", raising=False)
+
+    import pytest
+    import kalshi_bot.config as config
+    import kalshi_bot.main as main
+
+    importlib.reload(config)
+    importlib.reload(main)
+    settings = config.Settings()
+
+    with pytest.raises(RuntimeError, match="position reconciliation"):
+        main.build_clients(settings)

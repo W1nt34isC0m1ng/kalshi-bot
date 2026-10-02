@@ -46,6 +46,7 @@ class Market:
     polymarket_yes_token_id: str | None = None
     polymarket_no_token_id: str | None = None
     polymarket_fee_rate: float | None = None
+    polymarket_fee_liquidity_role: str = "maker"
     resolution_source: str | None = None
     tick_size: str | None = None
     neg_risk: bool | None = None
@@ -113,6 +114,7 @@ class Signal:
     exchange: str = "kalshi"
     market_slug: str | None = None
     fee_rate: float | None = None
+    fee_liquidity_role: str = "maker"
     resolution_source: str | None = None
 
 

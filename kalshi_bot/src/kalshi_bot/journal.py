@@ -50,6 +50,7 @@ class TradeJournal:
         "momentum_boost",
         "market_slug",
         "fee_rate",
+        "fee_liquidity_role",
         "resolution_source",
     ]
 
@@ -171,6 +172,7 @@ class TradeJournal:
             "momentum_boost": signal.momentum_boost,
             "market_slug": _csv_value(signal.market_slug),
             "fee_rate": _csv_value(signal.fee_rate),
+            "fee_liquidity_role": _csv_value(signal.fee_liquidity_role),
             "resolution_source": _csv_value(signal.resolution_source),
             "status": status,
             "status_reason": status_reason,

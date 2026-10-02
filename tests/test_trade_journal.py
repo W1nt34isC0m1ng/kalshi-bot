@@ -41,6 +41,7 @@ def test_journal_structured_signal_fields_are_appended_to_existing_schema():
         "momentum_boost",
         "market_slug",
         "fee_rate",
+        "fee_liquidity_role",
         "resolution_source",
     ]
 

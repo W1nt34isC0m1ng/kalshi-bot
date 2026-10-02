@@ -35,6 +35,7 @@ EXCHANGE=polymarket
 DRY_RUN=true
 POLYMARKET_ASSETS=btc
 POLYMARKET_TIMEFRAME=15m
+POLYMARKET_FEE_LIQUIDITY_ROLE=maker
 ```
 
 Then run from this directory:
@@ -63,6 +64,7 @@ POLYMARKET_API_SECRET=
 POLYMARKET_API_PASSPHRASE=
 POLYMARKET_SIGNATURE_TYPE=
 POLYMARKET_FUNDER=
+POLYMARKET_ALLOW_LIVE_WITHOUT_POSITION_RECONCILIATION=false
 ```
 
 Keep these out of git. Polymarket availability and trading access are subject
@@ -70,11 +72,19 @@ to Polymarket account, wallet, and geographic restrictions; the public read
 endpoints may still show `restricted=true` for events even when order books are
 readable.
 
-Polymarket crypto fees are estimated from the current Polymarket trading-fees
-documentation: `fee = contracts * feeRate * p * (1 - p)`, with Crypto
-`feeRate=0.07`, rounded to 5 decimal places in USDC. The adapter reads
-`feeSchedule.rate` from Gamma when available and falls back to `0.07` for these
-crypto markets.
+The bot submits Polymarket orders as post-only maker quotes and therefore uses
+`POLYMARKET_FEE_LIQUIDITY_ROLE=maker` by default. Polymarket's current trading
+fees documentation says makers are not charged fees; taker fees for Crypto use
+`fee = contracts * feeRate * p * (1 - p)`, with `feeRate=0.07`, rounded to 5
+decimal places in USDC. The adapter reads `feeSchedule.rate` from Gamma when
+available and falls back to `0.07` for these crypto markets if taker modeling is
+enabled with `POLYMARKET_FEE_LIQUIDITY_ROLE=taker`.
+
+Startup position reconciliation for live Polymarket accounts is not implemented
+yet. `DRY_RUN=false` fails closed unless
+`POLYMARKET_ALLOW_LIVE_WITHOUT_POSITION_RECONCILIATION=true` is set, which means
+you explicitly accept relying on local risk state until account reconciliation is
+added.
 
 ## Live 15m scanner assets
 The live crypto scanner remains BTC-only by default:

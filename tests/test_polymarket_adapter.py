@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "kalshi_bot" / "src"))
 
 from kalshi_bot.executor import ExecutionEngine
-from kalshi_bot.polymarket import PolymarketMarketDataService
+from kalshi_bot.polymarket import PolymarketHttpClient, PolymarketMarketDataService
 from kalshi_bot.risk import RiskManager
 from kalshi_bot.models import Signal
 
@@ -89,6 +89,11 @@ def test_polymarket_slug_uses_utc_15_minute_floor():
     )
 
 
+def test_polymarket_market_data_rejects_unsupported_timeframes():
+    with pytest.raises(ValueError, match="Only 15m"):
+        PolymarketMarketDataService(FakePolymarketClient(), assets=["btc"], timeframe="5m")
+
+
 def test_polymarket_market_data_maps_gamma_event_and_clob_books():
     client = FakePolymarketClient()
     service = PolymarketMarketDataService(
@@ -119,6 +124,96 @@ def test_polymarket_market_data_maps_gamma_event_and_clob_books():
     assert market.polymarket_fee_rate == 0.07
     assert "chain.link" in (market.resolution_source or "")
     assert client.registered["PMBTC15M-1790973900"]["yes_token_id"] == "up-token"
+
+
+def test_polymarket_market_data_skips_when_clob_book_fetch_fails():
+    class FailingBookClient(FakePolymarketClient):
+        def get_orderbook(self, token_id: str):
+            raise TimeoutError("book timeout")
+
+    service = PolymarketMarketDataService(
+        FailingBookClient(),
+        assets=["btc"],
+        now_ts=1790974450,
+    )
+
+    assert list(service.iter_open_markets()) == []
+
+
+def test_polymarket_create_order_uses_tokens_prices_and_gtd_expiration(monkeypatch):
+    client = PolymarketHttpClient(private_key="0xabc")
+    client.cache_market(
+        "PMBTC15M-1790973900",
+        {
+            "yes_token_id": "up-token",
+            "no_token_id": "down-token",
+            "tick_size": "0.01",
+            "neg_risk": False,
+        },
+    )
+    captured = []
+
+    class FakeClob:
+        def create_and_post_order(self, order_args, options, order_type, post_only):
+            captured.append(
+                {
+                    "token_id": order_args.token_id,
+                    "price": order_args.price,
+                    "size": order_args.size,
+                    "expiration": order_args.expiration,
+                    "tick_size": options.tick_size,
+                    "neg_risk": options.neg_risk,
+                    "order_type": order_type,
+                    "post_only": post_only,
+                }
+            )
+            return {"orderID": "order-1", "status": "live"}
+
+    monkeypatch.setattr(client, "_authenticated_clob_client", lambda: FakeClob())
+
+    yes_response = client.create_order(
+        ticker="PMBTC15M-1790973900",
+        side="yes",
+        action="buy",
+        count=3,
+        price=47,
+        expiration_ts=1790974810,
+        post_only=True,
+    )
+    no_response = client.create_order(
+        ticker="PMBTC15M-1790973900",
+        side="no",
+        action="buy",
+        count=4,
+        price=47,
+        expiration_ts=1790974811,
+        post_only=True,
+    )
+
+    assert yes_response["order"]["order_id"] == "order-1"
+    assert no_response["order"]["order_id"] == "order-1"
+    assert captured == [
+        {
+            "token_id": "up-token",
+            "price": 0.47,
+            "size": 3,
+            "expiration": 1790974810,
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "order_type": "GTD",
+            "post_only": True,
+        },
+        {
+            "token_id": "down-token",
+            "price": 0.53,
+            "size": 4,
+            "expiration": 1790974811,
+            "tick_size": "0.01",
+            "neg_risk": False,
+            "order_type": "GTD",
+            "post_only": True,
+        },
+    ]
 
 
 def test_execution_engine_dry_run_never_places_polymarket_order(tmp_path):

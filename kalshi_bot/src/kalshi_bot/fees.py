@@ -62,19 +62,39 @@ def estimate_polymarket_taker_fee_cents(
     return float(fee_dollars * Decimal(100))
 
 
+def estimate_polymarket_fee_cents(
+    side: str,
+    yes_price_cents: int,
+    contract_count: int = 1,
+    fee_rate: float | Decimal | None = None,
+    liquidity_role: str = "maker",
+) -> float:
+    """Estimate Polymarket trading fees in cents for the expected liquidity role."""
+    if (liquidity_role or "maker").lower() == "maker":
+        return 0.0
+    return estimate_polymarket_taker_fee_cents(
+        side,
+        yes_price_cents,
+        contract_count=contract_count,
+        fee_rate=fee_rate,
+    )
+
+
 def estimate_exchange_fee_cents(
     exchange: str,
     side: str,
     yes_price_cents: int,
     contract_count: int = 1,
     fee_rate: float | Decimal | None = None,
+    liquidity_role: str = "maker",
 ) -> int | float:
     normalized_exchange = (exchange or "kalshi").lower()
     if normalized_exchange == "polymarket":
-        return estimate_polymarket_taker_fee_cents(
+        return estimate_polymarket_fee_cents(
             side,
             yes_price_cents,
             contract_count=contract_count,
             fee_rate=fee_rate,
+            liquidity_role=liquidity_role,
         )
     return estimate_kalshi_fee_cents(side, yes_price_cents, contract_count=contract_count)

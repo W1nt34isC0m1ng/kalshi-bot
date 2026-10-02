@@ -121,6 +121,7 @@ class Settings:
     )
     polymarket_assets: list[str] | None = None
     polymarket_timeframe: str = os.getenv("POLYMARKET_TIMEFRAME", "15m").lower()
+    polymarket_fee_liquidity_role: str = os.getenv("POLYMARKET_FEE_LIQUIDITY_ROLE", "maker").lower()
     polymarket_chain_id: int = int(os.getenv("POLYMARKET_CHAIN_ID", "137"))
     polymarket_private_key: str = os.getenv("POLYMARKET_PRIVATE_KEY", "")
     polymarket_api_key: str = os.getenv("POLYMARKET_API_KEY", "")
@@ -128,6 +129,9 @@ class Settings:
     polymarket_api_passphrase: str = os.getenv("POLYMARKET_API_PASSPHRASE", "")
     polymarket_signature_type: int | None = None
     polymarket_funder: str = os.getenv("POLYMARKET_FUNDER", "")
+    polymarket_allow_live_without_position_reconciliation: bool = (
+        os.getenv("POLYMARKET_ALLOW_LIVE_WITHOUT_POSITION_RECONCILIATION", "false").lower() == "true"
+    )
 
     def __post_init__(self) -> None:
         if self.exchange not in {"kalshi", "polymarket"}:
@@ -139,6 +143,12 @@ class Settings:
         if self.polymarket_assets is None:
             self.polymarket_assets = [asset.lower() for asset in _csv("POLYMARKET_ASSETS", "btc")]
         self.polymarket_signature_type = _optional_int("POLYMARKET_SIGNATURE_TYPE")
+        if self.polymarket_fee_liquidity_role not in {"maker", "taker"}:
+            logging.warning(
+                "Unknown POLYMARKET_FEE_LIQUIDITY_ROLE=%s; defaulting to maker",
+                self.polymarket_fee_liquidity_role,
+            )
+            self.polymarket_fee_liquidity_role = "maker"
         if self.golf_enabled_market_types is None:
             self.golf_enabled_market_types = _csv("GOLF_ENABLED_MARKET_TYPES", "outright")
         if self.golf_outright_series is None:

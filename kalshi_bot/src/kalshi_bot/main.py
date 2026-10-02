@@ -28,6 +28,15 @@ console = Console()
 
 def build_clients(settings: Settings):
     if settings.exchange == "polymarket":
+        if (
+            not settings.dry_run
+            and not settings.polymarket_allow_live_without_position_reconciliation
+        ):
+            raise RuntimeError(
+                "Polymarket live trading is disabled until position reconciliation is implemented. "
+                "Set POLYMARKET_ALLOW_LIVE_WITHOUT_POSITION_RECONCILIATION=true only if you "
+                "accept using local risk state without startup exchange reconciliation."
+            )
         public_client = PolymarketHttpClient(
             gamma_base_url=settings.polymarket_gamma_base_url,
             clob_base_url=settings.polymarket_clob_base_url,
@@ -343,6 +352,7 @@ def main() -> None:
             api_client,
             assets=settings.polymarket_assets,
             timeframe=settings.polymarket_timeframe,
+            fee_liquidity_role=settings.polymarket_fee_liquidity_role,
         )
     else:
         market_data = MarketDataService(api_client, markets_per_event=settings.markets_per_event)
